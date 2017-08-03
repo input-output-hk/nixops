@@ -121,6 +121,7 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
                     else:
                         grp = self._conn.get_all_security_groups([ defn.security_group_name ])[0]
                     self.state = self.UP
+                    self.logger.log("check: current EC2 security group {0}/'{1}': {2}".format(grp.id, grp.description, repr(grp)))
                     self.security_group_id = grp.id
                     self.security_group_description = grp.description
                     rules = []
@@ -143,6 +144,7 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
 
         # Dereference elastic IP if used for the source ip
         resolved_security_group_rules = []
+        self.logger.log("SG defn: {0}".format(repr(defn)))
         for rule in defn.security_group_rules:
             if rule[-1].startswith("res-"):
                 res = self.depl.get_typed_resource(rule[-1][4:], "elastic-ip")
@@ -160,6 +162,8 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
             else:
                 old_rules.remove(tupled_rule)
 
+        self.logger.log("SG old: {0}".format(repr(old_rules)))
+        self.logger.log("SG new: {0}".format(repr(new_rules)))
         if self.state == self.MISSING or self.state == self.UNKNOWN:
             self._connect()
             try:
@@ -177,6 +181,7 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
                 self._connect()
                 grp = self.get_security_group()
             for rule in new_rules:
+                self.logger.log("SG adding rule: {0}".format(repr(rule)))
                 if len(rule) == 4:
                     grp.authorize(ip_protocol=rule[0], from_port=rule[1], to_port=rule[2], cidr_ip=rule[3])
                 else:
@@ -195,6 +200,7 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
                 self._connect()
                 grp = self.get_security_group()
             for rule in old_rules:
+                self.logger.log("SG removing rule: {0}".format(repr(rule)))
                 if len(rule) == 4:
                     grp.revoke(ip_protocol=rule[0], from_port=rule[1], to_port=rule[2], cidr_ip=rule[3])
                 else:
