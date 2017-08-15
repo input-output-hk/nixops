@@ -698,6 +698,7 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
                     self.client_token = nixops.util.generate_random_string(length=48) # = 64 ASCII chars
                     self.state = self.STARTING
 
+            self.log("launching instance with args: {0}".format(repr(common_args)))
             reservation = self._conn.run_instances(client_token=self.client_token, **common_args)
 
             assert len(reservation.instances) == 1
