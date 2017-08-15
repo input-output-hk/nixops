@@ -698,8 +698,7 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
                     self.client_token = nixops.util.generate_random_string(length=48) # = 64 ASCII chars
                     self.state = self.STARTING
 
-            reservation = self._retry(lambda: self._conn.run_instances(
-                client_token=self.client_token, **common_args), error_codes = ['InvalidParameterValue', 'UnauthorizedOperation' ])
+            reservation = self._conn.run_instances(client_token=self.client_token, **common_args)
 
             assert len(reservation.instances) == 1
             return reservation.instances[0]
