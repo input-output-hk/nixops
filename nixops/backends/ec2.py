@@ -7,6 +7,8 @@ import time
 import math
 import shutil
 import calendar
+import botocore
+import boto3
 import boto.ec2
 import boto.ec2.blockdevicemapping
 import boto.ec2.networkinterface
@@ -266,7 +268,9 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
         # Get the secret access key from the environment or from ~/.ec2-keys.
         (access_key_id, secret_access_key) = nixops.ec2_utils.fetch_aws_secret_key(self.route53_access_key_id)
 
-        self._conn_route53 = boto.connect_route53(access_key_id, secret_access_key)
+        self._conn_route53 = boto3.session.Session().client('route53', self.region,
+                                                            aws_access_key_id=access_key_id,
+                                                            aws_secret_access_key=secret_access_key)
 
 
     def _get_spot_instance_request_by_id(self, request_id, allow_missing=False):
@@ -1133,8 +1137,6 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
 
 
     def _update_route53(self, defn):
-        import boto.route53
-        import boto.route53.record
 
         self.dns_hostname = defn.dns_hostname
         self.dns_ttl = defn.dns_ttl
@@ -1148,16 +1150,16 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
         self.connect_route53()
 
         hosted_zone = ".".join(self.dns_hostname.split(".")[1:])
-        zones = self._conn_route53.get_all_hosted_zones()
+        zonesResponse = self._conn_route53.list_hosted_zones()
 
         def testzone(hosted_zone, zone):
             """returns True if there is a subcomponent match"""
             hostparts = hosted_zone.split(".")
-            zoneparts = zone.Name.split(".")[:-1] # strip the last ""
+            zoneparts = zone[u'Name'].split(".")[:-1] # strip the last ""
 
             return hostparts[::-1][:len(zoneparts)][::-1] == zoneparts
 
-        zones = [zone for zone in zones['ListHostedZonesResponse']['HostedZones'] if testzone(hosted_zone, zone)]
+        zones = [zone for zone in zonesResponse['HostedZones'] if testzone(hosted_zone, zone)]
         if len(zones) == 0:
             raise Exception('hosted zone for {0} not found'.format(hosted_zone))
 
@@ -1167,50 +1169,64 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
         dns_name = '{0}.'.format(self.dns_hostname)
 
         prev_a_rrs = [prev for prev
-                      in self._conn_route53.get_all_rrsets(
-                          hosted_zone_id=zoneid,
-                          type="A",
-                          name=dns_name
-                      )
-                      if prev.name == dns_name
-                      and prev.type == "A"]
+                      in self._conn_route53.list_resource_record_sets(
+                          HostedZoneId=zoneid,
+                          StartRecordName=dns_name,
+                          StartRecordType="A"
+                      )['ResourceRecordSets']
+                      if prev['Name'] == dns_name
+                      and prev['Type'] == "A"]
 
         prev_cname_rrs = [prev for prev
-                          in self._conn_route53.get_all_rrsets(
-                              hosted_zone_id=zoneid,
-                              type="CNAME",
-                              name=self.dns_hostname
-                          )
-                          if prev.name == dns_name
-                          and prev.type == "CNAME"]
+                          in self._conn_route53.list_resource_record_sets(
+                              HostedZoneId=zoneid,
+                              StartRecordName=self.dns_hostname,
+                              StartRecordType="CNAME"
+                          )['ResourceRecordSets']
+                          if prev['Name'] == dns_name
+                          and prev['Type'] == "CNAME"]
 
-        changes = boto.route53.record.ResourceRecordSets(connection=self._conn_route53, hosted_zone_id=zoneid)
-        if len(prev_a_rrs) > 0:
-            for prevrr in prev_a_rrs:
-                change = changes.add_change("DELETE", self.dns_hostname, "A", ttl=prevrr.ttl)
-                change.add_value(",".join(prevrr.resource_records))
-        if len(prev_cname_rrs) > 0:
-            for prevrr in prev_cname_rrs:
-                change = changes.add_change("DELETE", prevrr.name, "CNAME", ttl=prevrr.ttl)
-                change.add_value(",".join(prevrr.resource_records))
+        changes = []
+        def add_change (action, name, type, ttl = 600, rrs = []):
+            rrset = { 'Name': name,
+                      'Type': type,
+                      'TTL':  ttl,
+                      'ResourceRecords': rrs }
+            changes.append({ 'Action': action,
+                             'ResourceRecordSet': rrset })
 
-        change = changes.add_change("CREATE", self.dns_hostname, record_type, ttl=self.dns_ttl)
-        change.add_value(dns_value)
-        self._commit_route53_changes(changes)
+        for prevrr in prev_a_rrs:
+            add_change("DELETE", self.dns_hostname, "A",         ttl=prevrr['TTL'],
+                       rrs = prevrr['ResourceRecords'])
+        for prevrr in prev_cname_rrs:
+            add_change("DELETE", self.prevrr_name,  "CNAME",     ttl=prevrr['TTL'],
+                       rrs = prevrr['ResourceRecords'])
+
+        add_change("CREATE", self.dns_hostname,     record_type, ttl=prevrr['TTL'],
+                   rrs = [ { 'Value': dns_value } ])
+        self._commit_route53_changes(zoneid, changes)
 
 
-    def _commit_route53_changes(self, changes):
+    def _commit_route53_changes(self, zoneid, changes):
         """Commit changes, but retry PriorRequestNotComplete errors."""
         retry = 3
         while True:
             try:
                 retry -= 1
-                return changes.commit()
-            except boto.route53.exception.DNSServerError, e:
-                code = e.body.split("<Code>")[1]
-                code = code.split("</Code>")[0]
-                if code != 'PriorRequestNotComplete' or retry < 0:
-                    raise e
+
+                change_batch = { 'Changes' : changes }
+                self.log ("HostedZoneId: " + repr(zoneid))
+                self.log ("ChangeBatch: "  + repr(change_batch))
+                resp = self._conn_route53.change_resource_record_sets(HostedZoneId=zoneid, ChangeBatch=change_batch)
+                return resp
+            except botocore.exceptions.ClientError, e:
+                ## TODO:  fix error handling
+                self.log ("botocore.exceptions.ClientError: " + str (e))
+                self.log ("contents: " + str (e.__dict__))
+                # code = e.body.split("<Code>")[1]
+                # code = code.split("</Code>")[0]
+                # if code != 'PriorRequestNotComplete' or retry < 0:
+                #     raise e
                 time.sleep(1)
 
 
