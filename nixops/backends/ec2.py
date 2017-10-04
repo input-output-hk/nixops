@@ -65,6 +65,7 @@ class EC2Definition(MachineDefinition):
         self.dns_ttl = config["route53"]["ttl"]
         self.route53_access_key_id = config["route53"]["accessKeyId"]
         self.route53_use_public_dns_name = config["route53"]["usePublicDNSName"]
+        self.route53_multivalue_set_id = config["route53"]["multiValueSetId"]
 
     def show_type(self):
         return "{0} [{1}]".format(self.get_type(), self.region or self.zone or "???")
@@ -1142,10 +1143,16 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
         self.dns_ttl = defn.dns_ttl
         self.route53_access_key_id = defn.route53_access_key_id or nixops.ec2_utils.get_access_key_id()
         self.route53_use_public_dns_name = defn.route53_use_public_dns_name
+        self.route53_multivalue_set_id = defn.route53_multivalue_set_id
         record_type = 'CNAME' if self.route53_use_public_dns_name else 'A'
         dns_value = self.public_dns_name if self.route53_use_public_dns_name else self.public_ipv4
+        isMultiValue = type(self.route53_multivalue_set_id) == str
 
-        self.log('sending Route53 DNS: {0} {1} {2}'.format(self.dns_hostname, record_type, dns_value))
+        self.log('sending Route53 DNS: {0} {1} {2} {3}'.format(
+            self.dns_hostname,
+            record_type,
+            dns_value,
+            ("MV set id " ++ self.route53_multivalue_set_id) if isMultiValue else ""))
 
         self.connect_route53()
 
@@ -1187,22 +1194,26 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
                           and prev['Type'] == "CNAME"]
 
         changes = []
-        def add_change (action, name, type, ttl = 600, rrs = []):
+        def add_change (action, name, type, ttl = 600, mvSetIdentifier = None, rrs = []):
             rrset = { 'Name': name,
                       'Type': type,
                       'TTL':  ttl,
                       'ResourceRecords': rrs }
+            if mvSetIdentifier:
+                rrset.update({
+                    'MultiValueAnswer': True,
+                    'SetIdentifier':    mvSetIdentifier })
             changes.append({ 'Action': action,
                              'ResourceRecordSet': rrset })
 
         for prevrr in prev_a_rrs:
-            add_change("DELETE", self.dns_hostname, "A",         ttl=prevrr['TTL'],
+            add_change("DELETE", self.dns_hostname, "A",         ttl=prevrr['TTL'], mvSetIdentifier = None,
                        rrs = prevrr['ResourceRecords'])
         for prevrr in prev_cname_rrs:
-            add_change("DELETE", self.prevrr_name,  "CNAME",     ttl=prevrr['TTL'],
+            add_change("DELETE", self.prevrr_name,  "CNAME",     ttl=prevrr['TTL'], mvSetIdentifier = None,
                        rrs = prevrr['ResourceRecords'])
 
-        add_change("CREATE", self.dns_hostname,     record_type, ttl=prevrr['TTL'],
+        add_change("CREATE", self.dns_hostname,     record_type, ttl=prevrr['TTL'], mvSetIdentifier = None,
                    rrs = [ { 'Value': dns_value } ])
         self._commit_route53_changes(zoneid, changes)
 

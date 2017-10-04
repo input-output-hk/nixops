@@ -62,6 +62,15 @@ with lib;
       '';
     };
 
+    deployment.route53.multiValueSetId = mkOption {
+      default = null;
+      example = 42;
+      type = types.nullOr types.int;
+      description = ''
+        When non-null, this turns the RRSet entry into a member of a multi-value family.
+      '';
+    };
+
   };
 
 
