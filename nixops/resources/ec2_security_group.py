@@ -129,7 +129,10 @@ class EC2SecurityGroupState(nixops.resources.ResourceState):
                     rules = []
                     for rule in grp.rules:
                         for grant in rule.grants:
-                            new_rule = [ rule.ip_protocol, int(rule.from_port), int(rule.to_port) ]
+                            # 'boto' has a special case for these, which breaks --check:
+                            from_port = 0     if rule.from_port == None else int(rule.from_port)
+                            to_port   = 65535 if rule.to_port   == None else int(rule.to_port)
+                            new_rule = [ rule.ip_protocol, from_port, to_port ]
                             if grant.cidr_ip:
                                 new_rule.append(grant.cidr_ip)
                             else:
