@@ -67,7 +67,8 @@ class S3BucketState(nixops.resources.ResourceState):
     def connect(self):
         if self._conn: return
         (access_key_id, secret_access_key) = nixops.ec2_utils.fetch_aws_secret_key(self.access_key_id)
-        self._conn = boto.s3.connection.S3Connection(aws_access_key_id=access_key_id, aws_secret_access_key=secret_access_key)
+        self._conn = boto.s3.connection.S3Connection(aws_access_key_id=access_key_id, aws_secret_access_key=secret_access_key,
+                                                     debug = 5)
 
 
     def create(self, defn, check, allow_reboot, allow_recreate):
