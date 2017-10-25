@@ -1230,14 +1230,9 @@ class EC2State(MachineState, nixops.resources.ec2_common.EC2CommonState):
                 self.log ("ChangeBatch: "  + repr(change_batch))
                 resp = self._conn_route53.change_resource_record_sets(HostedZoneId=zoneid, ChangeBatch=change_batch)
                 return resp
-            except botocore.exceptions.ClientError, e:
-                ## TODO:  fix error handling
-                self.log ("botocore.exceptions.ClientError: " + str (e))
-                self.log ("contents: " + str (e.__dict__))
-                # code = e.body.split("<Code>")[1]
-                # code = code.split("</Code>")[0]
-                # if code != 'PriorRequestNotComplete' or retry < 0:
-                #     raise e
+            except botocore.exceptions.ClientError as e:
+                if e.response['Error']['Code'] != 'PriorRequestNotComplete' or retry < 0:
+                    raise e
                 time.sleep(1)
 
 
