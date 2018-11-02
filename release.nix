@@ -94,6 +94,7 @@ rec {
           pysqlite
           datadog
           digital-ocean
+          packet-python
         ];
 
       # For "nix-build --run-env".

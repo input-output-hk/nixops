@@ -89,6 +89,7 @@ rec {
   resources.snsTopics = evalResources ./sns-topic.nix (zipAttrs resourcesByType.snsTopics or []);
   resources.sqsQueues = evalResources ./sqs-queue.nix (zipAttrs resourcesByType.sqsQueues or []);
   resources.ec2KeyPairs = evalResources ./ec2-keypair.nix (zipAttrs resourcesByType.ec2KeyPairs or []);
+  resources.packetKeyPairs = evalResources ./packet-keypair.nix (zipAttrs resourcesByType.packetKeyPairs or []);
   resources.s3Buckets = evalResources ./s3-bucket.nix (zipAttrs resourcesByType.s3Buckets or []);
   resources.iamRoles = evalResources ./iam-role.nix (zipAttrs resourcesByType.iamRoles or []);
   resources.ec2SecurityGroups = evalResources ./ec2-security-group.nix (zipAttrs resourcesByType.ec2SecurityGroups or []);
@@ -312,6 +313,7 @@ rec {
           hetzner = optionalAttrs (v.config.deployment.targetEnv == "hetzner") v.config.deployment.hetzner;
           container = optionalAttrs (v.config.deployment.targetEnv == "container") v.config.deployment.container;
           route53 = v.config.deployment.route53;
+          packet = optionalAttrs (v.config.deployment.targetEnv == "packet") v.config.deployment.packet;
           virtualbox =
             let cfg = v.config.deployment.virtualbox; in
             optionalAttrs (v.config.deployment.targetEnv == "virtualbox") (cfg

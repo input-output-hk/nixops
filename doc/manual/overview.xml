@@ -1507,6 +1507,27 @@ xlink:href="https://github.com/elitak/nixos-infect">nixos-infect</link>
 <literal>NIXOS_LUSTRATE</literal> under the hood.
 </para>
 </section>
+<section xml:id="sec-deploying-to-packet"><title>Deploying to Packet.net</title>
+
+<para><xref linkend="ex-trivial-packet.nix" /> shows how to run
+a packet.net instance. We only support instance creation and
+destruction at the moment.
+</para>
+
+<example xml:id="ex-trivial-vultr.nix">
+  <title><filename>trivial-vultr.nix</filename>: A trivial vultr setup</title>
+<programlisting>
+{
+  machine = { config, pkgs, ... }: {
+    services.nginx.enable = true;
+    services.openssh.enable = true;
+
+    deployment.targetEnv = "packet";
+  };
+}
+</programlisting>
+</example>
+</section>
 
 <section><title>Deploying to Libvirtd (Qemu)</title>
 
@@ -1957,7 +1978,7 @@ deploy the new configuration.
 
   gollum =
     { config, pkgs, ... }:
-    { 
+    {
       services.gollum = {
         enable = true;
         port = 40273;
@@ -1967,7 +1988,7 @@ deploy the new configuration.
 
   reverseproxy =
     { config, pkgs, nodes, ... }:
-    { 
+    {
       services.nginx = {
         enable = true;
         let
@@ -1987,11 +2008,11 @@ deploy the new configuration.
   <para>
     Aditional module inputs are
   </para>
-  <itemizedlist> 
+  <itemizedlist>
     <listitem><para><literal>name</literal>: The name of the machine.</para></listitem>
     <listitem><para><literal>uuid</literal>: The NixOps UUID of the deployment.</para></listitem>
     <listitem><para><literal>resources</literal>: NixOps resources associated with the deployment.</para></listitem>
-  </itemizedlist> 
+  </itemizedlist>
 </section>
 
 <!--
