@@ -15,7 +15,7 @@ import nixops.known_hosts
 import socket
 import packet
 from json import dumps
-import pprint
+import getpass
 
 class PacketDefinition(MachineDefinition):
     @classmethod
@@ -26,6 +26,10 @@ class PacketDefinition(MachineDefinition):
         MachineDefinition.__init__(self, xml, config)
         self.access_key_id = config["packet"]["accessKeyId"]
         self.key_pair = config["packet"]["keyPair"]
+        self.tags = config["packet"]["tags"]
+        self.facility = config["packet"]["facility"]
+        self.plan = config["packet"]["plan"]
+        self.project = config["packet"]["project"]
 
     def show_type(self):
         return "packet [something]"
@@ -38,6 +42,9 @@ class PacketState(MachineState):
 
     state = nixops.util.attr_property("state", MachineState.MISSING, int)  # override
     accessKeyId = nixops.util.attr_property("packet.accessKeyId", None)
+    key_pair = nixops.util.attr_property("packet.keyPair", None)
+    public_ipv4 = nixops.util.attr_property("publicIpv4", None)
+    private_ipv4 = nixops.util.attr_property("privateIpv4", None)
 
     def __init__(self, depl, name, id):
         MachineState.__init__(self, depl, name, id)
@@ -45,19 +52,15 @@ class PacketState(MachineState):
 
     def get_ssh_name(self):
         retVal = None
-        if self.use_private_ip_address:
-            if not self.private_ipv4:
-                raise Exception("Packet machine '{0}' does not have a private IPv4 address (yet)".format(self.name))
-            retVal = self.private_ipv4
-        else:
-            if not self.public_ipv4:
-                raise Exception("Packet machine ‘{0}’ does not have a public IPv4 address (yet)".format(self.name))
-            retVal = self.public_ipv4
-        return retVal
+        if not self.public_ipv4:
+            raise Exception("Packet machine ‘{0}’ does not have a public IPv4 address (yet)".format(self.name))
+        return self.public_ipv4
 
+    @property
+    def resource_id(self):
+        return self.vm_id
 
     def get_ssh_private_key_file(self):
-        if self.private_key_file: return self.private_key_file
         if self._ssh_private_key_file: return self._ssh_private_key_file
         for r in self.depl.active_resources.itervalues():
             if isinstance(r, nixops.resources.packet_keypair.PacketKeyPairState) and \
@@ -65,7 +68,6 @@ class PacketState(MachineState):
                     r.keypair_name == self.key_pair:
                 return self.write_ssh_private_key(r.private_key)
         return None
-
 
     def get_ssh_flags(self, *args, **kwargs):
         file = self.get_ssh_private_key_file()
@@ -121,11 +123,6 @@ class PacketState(MachineState):
 
         })
 
-    def get_ssh_private_key_file(self):
-        if self._ssh_private_key_file:
-            return self._ssh_private_key_file
-        else:
-            return self.write_ssh_private_key(self._ssh_private_key)
 
     def create_after(self, resources, defn):
         # make sure the ssh key exists before we do anything else
@@ -150,45 +147,46 @@ class PacketState(MachineState):
 
 
     def destroy(self, wipe=False):
-        self.log("destroying instance {}".format(self.subid))
-        vultr = Vultr(self.get_api_key())
+        self.log("destroying instance {}".format(self.vm_id))
         try:
-            vultr.server_destroy(self.subid)
-        except VultrError:
+            self.manager = packet.Manager(auth_token=self.accessKeyId)
+            instance = self.manager.get_device(self.vm_id)
+            instance.delete()
+        except Exception as e:
+            print e
             self.log("An error occurred destroying instance. Assuming it's been destroyed already.")
         self.public_ipv4 = None
-        self.subid = None
+        self.private_ipv4 = None
+        self.vm_id = None
+        self.state = MachineState.MISSING
 
     def create(self, defn, check, allow_reboot, allow_recreate):
+        assert isinstance(defn, PacketDefinition)
         self.manager = packet.Manager(auth_token=defn.access_key_id)
-        kp = self.depl.get_typed_resource(defn.key_pair, 'packet-keypair')
-        common_tags = self.get_common_tags()
-        tags = {'Name': "{0} [{1}]".format(self.depl.description, self.name)}
-        tags.update(defn.tags)
-        tags.update(common_tags)
-        self.log_start("creating packet device ...")
-        instance = self.manager.create_device(
-            hostname=self.name,
-            facility=defn.facility,
-            user_ssh_keys=[kp.keypair_id],
-            operating_system='nixos_18_03',
-            plan=defn.plan,
-            project=defn.project,
-            tags=tags
-        )
 
-        self.vm_id = instance.id
-        self.log("instance id: " + self.vm_id)
-        while server_info['status'] == 'pending' or server_info['server_state'] != 'ok':
-            server_info = vultr.server_list()[subid]
-            time.sleep(1)
-            self.log_continue("[status: {} state: {}] ".format(server_info['status'], server_info['server_state']))
-            if server_info['status'] == 'active' and server_info['server_state'] == 'ok':
-                # vultr sets ok before locked when restoring snapshot. Need to make sure we're really ready.
-                time.sleep(10)
-                server_info = vultr.server_list()[subid]
-        if server_info['status'] != 'active' or server_info['server_state'] != 'ok':
-            raise Exception("unexpected status: {}/{}".format(server_info['status'],server_info['server_state']))
+        if self.state != self.UP:
+            check = True
+
+        if self.vm_id and check:
+            try:
+                instance = self.manager.get_device(self.vm_id)
+            except packet.baseapi.Error as e:
+                if e.args[0] == "Error 404: Not found":
+                    instance = None
+                else:
+                    raise e
+
+            if instance is None:
+                if not allow_recreate:
+                    raise Exception("EC2 instance ‘{0}’ went away; use ‘--allow-recreate’ to create a new one".format(self.name))
+
+            if instance:
+                self.update_state(instance)
+
+        if not self.vm_id:
+            self.create_device(defn, check, allow_reboot, allow_recreate)
+
+    def update_state(self, instance):
         addresses = instance.ip_addresses
         for address in addresses:
            if address["public"] and address["address_family"] == 4:
@@ -203,6 +201,35 @@ class PacketState(MachineState):
                self.private_ipv4 = address["address"]
                self.private_gateway = address["gateway"]
                self.private_cidr = address["cidr"]
+
+    def create_device(self, defn, check, allow_reboot, allow_recreate):
+        self.manager = packet.Manager(auth_token=defn.access_key_id)
+        kp = self.depl.get_typed_resource("foo", 'packet-keypair')
+        common_tags = self.get_common_tags()
+        tags = {'Name': "{0} [{1}]".format(self.depl.description, self.name)}
+        tags.update(defn.tags)
+        tags.update(common_tags)
+        self.log_start("creating packet device ...")
+        self.log("project: '{0}'".format(defn.project))
+        self.log("facility: {0}".format(defn.facility));
+        self.log("keyid: {0}".format(kp.keypair_id))
+        instance = self.manager.create_device(
+            hostname=self.name,
+            facility=[ defn.facility ],
+            user_ssh_keys=[],
+            operating_system='nixos_18_03',
+            plan=defn.plan,
+            project_id=defn.project,
+            tags=tags,
+            spot_instance = True,
+            spot_price_max = 10.00,
+        )
+
+        self.vm_id = instance.id
+        self.accessKeyId = defn.access_key_id;
+        self.state = self.STARTING
+        self.log("instance id: " + self.vm_id)
+        self.update_state(instance)
 
         self.log_end("{}".format(self.public_ipv4))
         self.wait_for_ssh()
