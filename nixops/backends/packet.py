@@ -152,9 +152,13 @@ class PacketState(MachineState):
             self.manager = packet.Manager(auth_token=self.accessKeyId)
             instance = self.manager.get_device(self.vm_id)
             instance.delete()
-        except Exception as e:
-            print e
-            self.log("An error occurred destroying instance. Assuming it's been destroyed already.")
+        except packet.baseapi.Error as e:
+            if e.args[0] == "Error 422: Cannot delete a device while it is provisioning":
+                self.state = self.packetstate2state(instance.state)
+                raise e
+            else:
+                print e
+                self.log("An error occurred destroying instance. Assuming it's been destroyed already.")
         self.public_ipv4 = None
         self.private_ipv4 = None
         self.vm_id = None
@@ -173,6 +177,8 @@ class PacketState(MachineState):
             except packet.baseapi.Error as e:
                 if e.args[0] == "Error 404: Not found":
                     instance = None
+                    self.vm_id = None
+                    self.state = MachineState.MISSING
                 else:
                     raise e
 
@@ -187,6 +193,7 @@ class PacketState(MachineState):
             self.create_device(defn, check, allow_reboot, allow_recreate)
 
     def update_state(self, instance):
+        self.state = self.packetstate2state(instance.state)
         addresses = instance.ip_addresses
         for address in addresses:
            if address["public"] and address["address_family"] == 4:
@@ -201,6 +208,17 @@ class PacketState(MachineState):
                self.private_ipv4 = address["address"]
                self.private_gateway = address["gateway"]
                self.private_cidr = address["cidr"]
+
+    def packetstate2state(self, packetstate):
+        states = {
+                "queued": MachineState.STARTING,
+                "provisioning": MachineState.STARTING,
+                "active": MachineState.UP,
+                "powering_off": MachineState.STOPPING,
+                "powering_on": MachineState.STARTING,
+                "inactive": MachineState.STOPPED,
+        }
+        return states.get(packetstate)
 
     def create_device(self, defn, check, allow_reboot, allow_recreate):
         self.manager = packet.Manager(auth_token=defn.access_key_id)
@@ -227,8 +245,17 @@ class PacketState(MachineState):
 
         self.vm_id = instance.id
         self.accessKeyId = defn.access_key_id;
-        self.state = self.STARTING
         self.log("instance id: " + self.vm_id)
+        self.update_state(instance)
+
+        self.log("instance is in {} state".format(instance.state))
+
+        while True:
+            instance = self.manager.get_device(self.vm_id)
+            if instance.state == "active": break
+            self.log("instance is in {} state".format(instance.state))
+            time.sleep(10)
+
         self.update_state(instance)
 
         self.log_end("{}".format(self.public_ipv4))
