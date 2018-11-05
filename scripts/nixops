@@ -667,6 +667,13 @@ def op_rollback():
                   sync=not args.no_sync)
 
 
+def op_sos_console():
+    depl = open_deployment()
+    m = depl.machines.get(args.machine)
+    if not m: raise Exception("unknown machine ‘{0}’".format(args.machine))
+    m.sos_console()
+
+
 def op_show_console_output():
     depl = open_deployment()
     m = depl.machines.get(args.machine)
@@ -953,6 +960,11 @@ add_common_deployment_options(subparser)
 
 subparser = add_subparser('show-console-output', help='print the machine\'s console output on stdout')
 subparser.set_defaults(op=op_show_console_output)
+subparser.add_argument('machine', metavar='MACHINE', help='identifier of the machine')
+add_common_deployment_options(subparser)
+
+subparser = add_subparser('sos-console', help='connect to the machine\'s sos console')
+subparser.set_defaults(op=op_sos_console)
 subparser.add_argument('machine', metavar='MACHINE', help='identifier of the machine')
 add_common_deployment_options(subparser)
 

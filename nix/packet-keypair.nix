@@ -19,6 +19,10 @@ with lib;
       description = "The Packet Access Key ID.";
     };
 
+    project = mkOption {
+      type = types.str;
+      description = "UUID of a project (must match all devices using it)";
+    };
   };
 
   config._type = "packet-keypair";

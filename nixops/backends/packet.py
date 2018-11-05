@@ -7,6 +7,7 @@ from __future__ import absolute_import
 import os
 import os.path
 import time
+import sys
 import nixops.resources
 from nixops.backends import MachineDefinition, MachineState
 from nixops.nix_expr import Function, RawValue
@@ -80,14 +81,34 @@ class PacketState(MachineState):
         super_flags = super(PacketState, self).get_ssh_flags(*args, **kwargs)
         return super_flags + (["-i", file] if file else []) + [ "-o", "StrictHostKeyChecking=accept-new" ]
 
+    def get_sos_ssh_name(self):
+        self.manager = packet.Manager(auth_token=self.accessKeyId)
+        instance = self.manager.get_device(self.vm_id)
+        return "sos.{}.packet.net".format(instance.facility['code'])
+
+    def sos_console(self):
+        ssh = nixops.ssh_util.SSH(self.logger)
+        ssh.register_flag_fun(self.get_ssh_flags)
+        ssh.register_host_fun(self.get_sos_ssh_name)
+        flags, command = ssh.split_openssh_args([])
+        user = self.vm_id
+        sys.exit(ssh.run_command(command, flags, check=False, logged=False,
+                               allow_ssh_args=True, user=user))
+
     def get_physical_spec(self):
         kp = self.depl.get_typed_resource("foo", 'packet-keypair')
         return Function("{ ... }", {
             ('config', 'boot', 'initrd', 'availableKernelModules'): [ "ata_piix", "uhci_hcd", "virtio_pci", "sr_mod", "virtio_blk" ],
-            ('config', 'boot', 'loader', 'grub', 'device'): '/dev/vda',
-            ('config', 'fileSystems', '/'): { 'device': '/dev/vda1', 'fsType': 'btrfs'},
+            ('config', 'boot', 'loader', 'grub', 'devices'): [ '/dev/sda', '/dev/sdb' ],
+            ('config', 'fileSystems', '/'): { 'label': 'nixos', 'fsType': 'ext4'},
             ('config', 'users', 'users', 'root', 'openssh', 'authorizedKeys', 'keys'): [kp.public_key],
             ('config', 'networking', 'bonds', 'bond0', 'interfaces'): [ "enp1s0f0", "enp1s0f1"],
+            ('config', 'boot', 'kernelParams'): [ "console=ttyS1,115200n8" ],
+            ('config', 'boot', 'loader', 'grub', 'extraConfig'): """
+                serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
+                terminal_output serial console
+                terminal_input serial console
+            """,
             ('config', 'networking', 'bonds', 'bond0', 'driverOptions'): {
                 "mode": "802.3ad",
                 "xmit_hash_policy": "layer3+4",
@@ -96,6 +117,7 @@ class PacketState(MachineState):
                 "miimon": "100",
                 "updelay": "200",
               },
+            ('config', 'networking', 'nameservers'): [ "8.8.8.8", "8.8.4.4" ], # TODO
             ('config', 'networking', 'defaultGateway'): {
                 "address": self.default_gateway,
                 "interface": "bond0",
@@ -170,6 +192,7 @@ class PacketState(MachineState):
         self.private_ipv4 = None
         self.vm_id = None
         self.state = MachineState.MISSING
+        self.key_pair = None
 
     def create(self, defn, check, allow_reboot, allow_recreate):
         assert isinstance(defn, PacketDefinition)
@@ -250,6 +273,7 @@ class PacketState(MachineState):
             hostname=self.name,
             facility=[ defn.facility ],
             user_ssh_keys=[],
+            project_ssh_keys = [ kp.keypair_id ],
             operating_system='nixos_18_03',
             plan=defn.plan,
             project_id=defn.project,

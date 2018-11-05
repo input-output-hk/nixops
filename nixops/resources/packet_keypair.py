@@ -22,6 +22,7 @@ class PacketKeyPairDefinition(nixops.resources.ResourceDefinition):
         nixops.resources.ResourceDefinition.__init__(self, xml)
         self.keypair_name = xml.find("attrs/attr[@name='name']/string").get("value")
         self.access_key_id = xml.find("attrs/attr[@name='accessKeyId']/string").get("value")
+        self.project = xml.find("attrs/attr[@name='project']/string").get("value")
 
     def show_type(self):
         return "{0} [something]".format(self.get_type())
@@ -36,6 +37,7 @@ class PacketKeyPairState(nixops.resources.ResourceState):
     private_key = nixops.util.attr_property("privateKey", None)
     access_key_id = nixops.util.attr_property("packet.accessKeyId", None)
     keypair_id = nixops.util.attr_property("packet.keyPairId", None)
+    project = nixops.util.attr_property("packet.project", None)
 
 
     @classmethod
@@ -64,6 +66,7 @@ class PacketKeyPairState(nixops.resources.ResourceState):
 
         # TODO: Fix Me
         self.access_key_id = defn.access_key_id or nixops.ec2_utils.get_access_key_id()
+        self.project = defn.project
         if not self.access_key_id:
             raise Exception("please set ‘accessKeyId’, $PACKET_ACCESS_KEY")
 
@@ -91,7 +94,7 @@ class PacketKeyPairState(nixops.resources.ResourceState):
             if not kp or self.state != self.UP:
                 if kp: kp.delete()
                 self.log("uploading Packet key pair ‘{0}’...".format(defn.keypair_name))
-                kp = self._conn.create_ssh_key(defn.keypair_name, self.public_key)
+                kp = self._conn.create_project_ssh_key(self.project, defn.keypair_name, self.public_key)
                 self.keypair_id = kp.id
 
             with self.depl._db:

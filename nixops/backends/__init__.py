@@ -404,6 +404,9 @@ class MachineState(nixops.resources.ResourceState):
     def get_console_output(self):
         return "(not available for this machine type)\n"
 
+    def sos_console(self):
+        self.log("(not available for this machine type)")
+
 
 class CheckResult(object):
     def __init__(self):
