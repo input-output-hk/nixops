@@ -78,7 +78,7 @@ class PacketState(MachineState):
     def get_ssh_flags(self, *args, **kwargs):
         file = self.get_ssh_private_key_file()
         super_flags = super(PacketState, self).get_ssh_flags(*args, **kwargs)
-        return super_flags + (["-i", file] if file else [])
+        return super_flags + (["-i", file] if file else []) + [ "-o", "StrictHostKeyChecking=accept-new" ]
 
     def get_physical_spec(self):
         kp = self.depl.get_typed_resource("foo", 'packet-keypair')
@@ -268,6 +268,7 @@ class PacketState(MachineState):
 
         while True:
             instance = self.manager.get_device(self.vm_id)
+            self.update_state(instance)
             if instance.state == "active": break
             if instance.state == "provisioning" and hasattr(instance, "provisioning_percentage") and instance.provisioning_percentage:
                 self.log("instance is in {} {} state".format(instance.state, instance.provisioning_percentage))
@@ -276,6 +277,7 @@ class PacketState(MachineState):
             time.sleep(10)
 
         self.update_state(instance)
+        nixops.known_hosts.remove(self.public_ipv4, None)
 
         self.log_end("{}".format(self.public_ipv4))
         self.wait_for_ssh()
