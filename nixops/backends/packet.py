@@ -176,6 +176,7 @@ class PacketState(MachineState):
 
 
     def destroy(self, wipe=False):
+        if not self.depl.logger.confirm("are you sure you want to destroy Packet.Net machine ‘{0}’?".format(self.name)): return False
         self.log("destroying instance {}".format(self.vm_id))
         try:
             self.manager = packet.Manager(auth_token=self.accessKeyId)
