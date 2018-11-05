@@ -69,12 +69,11 @@ class PacketState(MachineState):
 
     def get_ssh_private_key_file(self):
         if self._ssh_private_key_file: return self._ssh_private_key_file
-        for r in self.depl.active_resources.itervalues():
-            if isinstance(r, nixops.resources.packet_keypair.PacketKeyPairState) and \
-                    r.state == nixops.resources.packet_keypair.PacketKeyPairState.UP and \
-                    r.keypair_name == self.key_pair:
-                return self.write_ssh_private_key(r.private_key)
-        return None
+        kp = self.findKeypairResource(self.key_pair)
+        if kp:
+            return self.write_ssh_private_key(kp.private_key)
+        else:
+            return None
 
     def get_ssh_flags(self, *args, **kwargs):
         file = self.get_ssh_private_key_file()
@@ -228,9 +227,17 @@ class PacketState(MachineState):
         }
         return states.get(packetstate)
 
+    def findKeypairResource(self, key_pair_name):
+        for r in self.depl.active_resources.itervalues():
+            if isinstance(r, nixops.resources.packet_keypair.PacketKeyPairState) and \
+                    r.state == nixops.resources.packet_keypair.PacketKeyPairState.UP and \
+                    r.keypair_name == key_pair_name:
+                return r
+        return None
+
     def create_device(self, defn, check, allow_reboot, allow_recreate):
         self.manager = packet.Manager(auth_token=defn.access_key_id)
-        kp = self.depl.get_typed_resource("foo", 'packet-keypair')
+        kp = self.findKeypairResource(defn.key_pair)
         common_tags = self.get_common_tags()
         tags = {'Name': "{0} [{1}]".format(self.depl.description, self.name)}
         tags.update(defn.tags)
@@ -252,6 +259,7 @@ class PacketState(MachineState):
         )
 
         self.vm_id = instance.id
+        self.key_pair = defn.key_pair
         self.accessKeyId = defn.access_key_id;
         self.log("instance id: " + self.vm_id)
         self.update_state(instance)
@@ -261,7 +269,7 @@ class PacketState(MachineState):
         while True:
             instance = self.manager.get_device(self.vm_id)
             if instance.state == "active": break
-            if instance.state == "provisioning":
+            if instance.state == "provisioning" and hasattr(instance, "provisioning_percentage") and instance.provisioning_percentage:
                 self.log("instance is in {} {} state".format(instance.state, instance.provisioning_percentage))
             else:
                 self.log("instance is in {} state".format(instance.state))

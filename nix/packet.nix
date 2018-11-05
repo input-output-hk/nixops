@@ -30,7 +30,7 @@ in
         type = types.either types.str (resource "packet-keypair");
         apply = x: if builtins.isString x then x else x.name;
         description = ''
-          Needs to be UUID of existing keypair or a resource created
+          Needs to be TODO of existing keypair or a resource created
           by nixops using `resources.packetKeyPairs.<name>`.
         '';
       };
