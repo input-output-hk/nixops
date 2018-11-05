@@ -44,7 +44,14 @@ class PacketState(MachineState):
     accessKeyId = nixops.util.attr_property("packet.accessKeyId", None)
     key_pair = nixops.util.attr_property("packet.keyPair", None)
     public_ipv4 = nixops.util.attr_property("publicIpv4", None)
+    public_ipv6 = nixops.util.attr_property("publicIpv6", None)
     private_ipv4 = nixops.util.attr_property("privateIpv4", None)
+    default_gateway = nixops.util.attr_property("defaultGateway", None)
+    private_gateway = nixops.util.attr_property("privateGateway", None)
+    default_gatewayv6 = nixops.util.attr_property("defaultGatewayv6", None)
+    public_cidr = nixops.util.attr_property("publicCidr", None, int)
+    public_cidrv6 = nixops.util.attr_property("publicCidrv6", None, int)
+    private_cidr = nixops.util.attr_property("privateCidr", None, int)
 
     def __init__(self, depl, name, id):
         MachineState.__init__(self, depl, name, id)
@@ -75,11 +82,12 @@ class PacketState(MachineState):
         return super_flags + (["-i", file] if file else [])
 
     def get_physical_spec(self):
+        kp = self.depl.get_typed_resource("foo", 'packet-keypair')
         return Function("{ ... }", {
             ('config', 'boot', 'initrd', 'availableKernelModules'): [ "ata_piix", "uhci_hcd", "virtio_pci", "sr_mod", "virtio_blk" ],
             ('config', 'boot', 'loader', 'grub', 'device'): '/dev/vda',
             ('config', 'fileSystems', '/'): { 'device': '/dev/vda1', 'fsType': 'btrfs'},
-            ('config', 'users', 'users', 'root', 'openssh', 'authorizedKeys', 'keys'): [self._ssh_public_key],
+            ('config', 'users', 'users', 'root', 'openssh', 'authorizedKeys', 'keys'): [kp.public_key],
             ('config', 'networking', 'bonds', 'bond0', 'interfaces'): [ "enp1s0f0", "enp1s0f1"],
             ('config', 'networking', 'bonds', 'bond0', 'driverOptions'): {
                 "mode": "802.3ad",
@@ -240,7 +248,7 @@ class PacketState(MachineState):
             project_id=defn.project,
             tags=tags,
             spot_instance = True,
-            spot_price_max = 10.00,
+            spot_price_max = 2.00,
         )
 
         self.vm_id = instance.id
@@ -253,7 +261,10 @@ class PacketState(MachineState):
         while True:
             instance = self.manager.get_device(self.vm_id)
             if instance.state == "active": break
-            self.log("instance is in {} state".format(instance.state))
+            if instance.state == "provisioning":
+                self.log("instance is in {} {} state".format(instance.state, instance.provisioning_percentage))
+            else:
+                self.log("instance is in {} state".format(instance.state))
             time.sleep(10)
 
         self.update_state(instance)
