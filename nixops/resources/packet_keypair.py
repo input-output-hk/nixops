@@ -4,6 +4,7 @@
 
 import nixops.util
 import nixops.resources
+import nixops.packet_utils
 import packet
 
 
@@ -60,7 +61,7 @@ class PacketKeyPairState(nixops.resources.ResourceState):
 
     def connect(self):
         if self._conn: return
-        self._conn = packet.Manager(auth_token=self.access_key_id)
+        self._conn = nixops.packet_utils.connect(self.access_key_id)
 
     def create(self, defn, check, allow_reboot, allow_recreate):
 

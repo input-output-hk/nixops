@@ -57,6 +57,7 @@ class PacketState(MachineState):
     def __init__(self, depl, name, id):
         MachineState.__init__(self, depl, name, id)
         self.name = name
+        self._conn = None
 
     def get_ssh_name(self):
         retVal = None
@@ -67,6 +68,11 @@ class PacketState(MachineState):
     @property
     def resource_id(self):
         return self.vm_id
+
+    def connect(self):
+        if self._conn: return self._conn
+        self._conn = nixops.packet_utils.connect(self.accessKeyId)
+        return self._conn
 
     def get_ssh_private_key_file(self):
         if self._ssh_private_key_file: return self._ssh_private_key_file
@@ -82,8 +88,8 @@ class PacketState(MachineState):
         return super_flags + (["-i", file] if file else []) + [ "-o", "StrictHostKeyChecking=accept-new" ]
 
     def get_sos_ssh_name(self):
-        self.manager = packet.Manager(auth_token=self.accessKeyId)
-        instance = self.manager.get_device(self.vm_id)
+        self.connect()
+        instance = self._conn.get_device(self.vm_id)
         return "sos.{}.packet.net".format(instance.facility['code'])
 
     def sos_console(self):
@@ -176,11 +182,11 @@ class PacketState(MachineState):
 
 
     def destroy(self, wipe=False):
+        self.connect()
         if not self.depl.logger.confirm("are you sure you want to destroy Packet.Net machine ‘{0}’?".format(self.name)): return False
         self.log("destroying instance {}".format(self.vm_id))
         try:
-            self.manager = packet.Manager(auth_token=self.accessKeyId)
-            instance = self.manager.get_device(self.vm_id)
+            instance = self._conn.get_device(self.vm_id)
             instance.delete()
         except packet.baseapi.Error as e:
             if e.args[0] == "Error 422: Cannot delete a device while it is provisioning":
@@ -197,14 +203,14 @@ class PacketState(MachineState):
 
     def create(self, defn, check, allow_reboot, allow_recreate):
         assert isinstance(defn, PacketDefinition)
-        self.manager = packet.Manager(auth_token=defn.access_key_id)
+        self.connect()
 
         if self.state != self.UP:
             check = True
 
         if self.vm_id and check:
             try:
-                instance = self.manager.get_device(self.vm_id)
+                instance = self._conn.get_device(self.vm_id)
             except packet.baseapi.Error as e:
                 if e.args[0] == "Error 404: Not found":
                     instance = None
@@ -260,7 +266,7 @@ class PacketState(MachineState):
         return None
 
     def create_device(self, defn, check, allow_reboot, allow_recreate):
-        self.manager = packet.Manager(auth_token=defn.access_key_id)
+        self.connect()
         kp = self.findKeypairResource(defn.key_pair)
         common_tags = self.get_common_tags()
         tags = {'Name': "{0} [{1}]".format(self.depl.description, self.name)}
@@ -270,7 +276,7 @@ class PacketState(MachineState):
         self.log("project: '{0}'".format(defn.project))
         self.log("facility: {0}".format(defn.facility));
         self.log("keyid: {0}".format(kp.keypair_id))
-        instance = self.manager.create_device(
+        instance = self._conn.create_device(
             hostname=self.name,
             facility=[ defn.facility ],
             user_ssh_keys=[],
@@ -292,11 +298,11 @@ class PacketState(MachineState):
         self.log("instance is in {} state".format(instance.state))
 
         while True:
-            instance = self.manager.get_device(self.vm_id)
+            instance = self._conn.get_device(self.vm_id)
             self.update_state(instance)
             if instance.state == "active": break
             if instance.state == "provisioning" and hasattr(instance, "provisioning_percentage") and instance.provisioning_percentage:
-                self.log("instance is in {} {} state".format(instance.state, instance.provisioning_percentage))
+                self.log("instance is in {}, {}% done".format(instance.state, int(instance.provisioning_percentage)))
             else:
                 self.log("instance is in {} state".format(instance.state))
             time.sleep(10)
