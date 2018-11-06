@@ -31,6 +31,9 @@ class PacketDefinition(MachineDefinition):
         self.facility = config["packet"]["facility"]
         self.plan = config["packet"]["plan"]
         self.project = config["packet"]["project"]
+        self.nixosVersion = config["packet"]["nixosVersion"]
+        self.spotInstance = config["packet"]["spotInstance"]
+        self.spotPriceMax = config["packet"]["spotPriceMax"]
 
     def show_type(self):
         return "packet [something]"
@@ -71,6 +74,8 @@ class PacketState(MachineState):
 
     def connect(self):
         if self._conn: return self._conn
+        if not self.accessKeyId:
+            raise Exception("No API token is set, ensure packet.accessKeyId is set!")
         self._conn = nixops.packet_utils.connect(self.accessKeyId)
         return self._conn
 
@@ -102,7 +107,7 @@ class PacketState(MachineState):
                                allow_ssh_args=True, user=user))
 
     def get_physical_spec(self):
-        kp = self.depl.get_typed_resource("foo", 'packet-keypair')
+        kp = self.findKeypairResource(self.key_pair)
         return Function("{ ... }", {
             ('config', 'boot', 'initrd', 'availableKernelModules'): [ "ata_piix", "uhci_hcd", "virtio_pci", "sr_mod", "virtio_blk" ],
             ('config', 'boot', 'loader', 'grub', 'devices'): [ '/dev/sda', '/dev/sdb' ],
@@ -203,6 +208,7 @@ class PacketState(MachineState):
 
     def create(self, defn, check, allow_reboot, allow_recreate):
         assert isinstance(defn, PacketDefinition)
+        self.accessKeyId = defn.access_key_id
         self.connect()
 
         if self.state != self.UP:
@@ -266,6 +272,7 @@ class PacketState(MachineState):
         return None
 
     def create_device(self, defn, check, allow_reboot, allow_recreate):
+
         self.connect()
         kp = self.findKeypairResource(defn.key_pair)
         common_tags = self.get_common_tags()
@@ -277,16 +284,16 @@ class PacketState(MachineState):
         self.log("facility: {0}".format(defn.facility));
         self.log("keyid: {0}".format(kp.keypair_id))
         instance = self._conn.create_device(
+            project_id=defn.project,
             hostname=self.name,
+            plan=defn.plan,
             facility=[ defn.facility ],
+            operating_system=defn.nixosVersion,
             user_ssh_keys=[],
             project_ssh_keys = [ kp.keypair_id ],
-            operating_system='nixos_18_03',
-            plan=defn.plan,
-            project_id=defn.project,
+            spot_instance = defn.spotInstance,
+            spot_price_max = defn.spotPriceMax,
             tags=tags,
-            spot_instance = True,
-            spot_price_max = 2.00,
         )
 
         self.vm_id = instance.id

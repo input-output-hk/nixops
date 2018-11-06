@@ -46,6 +46,28 @@ in
         description = ''
         '';
       };
+      nixosVersion = mkOption {
+        example = "nixos_18_03";
+        default = "nixos_18_03";
+        type = types.str;
+        description = ''
+          NixOS version to install
+        '';
+      };
+      spotInstance = mkOption {
+        default = false;
+        type = types.bool;
+        description = ''
+          Request a spot instance (WARNING: can be destroyed at any time based on demand)
+        '';
+      };
+      spotPriceMax = mkOption {
+        default = -1;
+        type = types.int;
+        description = ''
+          Price (in dollar cents per hour) to use for spot instances request for the machine.
+        '';
+      };
       tags = mkOption {
         default = { };
         example = { foo = "bar"; xyzzy = "bla"; };
