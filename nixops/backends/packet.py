@@ -205,6 +205,7 @@ class PacketState(MachineState):
         self.vm_id = None
         self.state = MachineState.MISSING
         self.key_pair = None
+        return True
 
     def create(self, defn, check, allow_reboot, allow_recreate):
         assert isinstance(defn, PacketDefinition)
