@@ -276,7 +276,7 @@ class PacketState(MachineState):
         self.connect()
         kp = self.findKeypairResource(defn.key_pair)
         common_tags = self.get_common_tags()
-        tags = {'Name': "{0} [{1}]".format(self.depl.description, self.name)}
+        tags = { }
         tags.update(defn.tags)
         tags.update(common_tags)
         self.log_start("creating packet device ...")
@@ -285,7 +285,7 @@ class PacketState(MachineState):
         self.log("keyid: {0}".format(kp.keypair_id))
         instance = self._conn.create_device(
             project_id=defn.project,
-            hostname=self.name,
+            hostname = "{0} [{1}]".format(self.depl.description, self.name),
             plan=defn.plan,
             facility=[ defn.facility ],
             operating_system=defn.nixosVersion,
@@ -293,7 +293,7 @@ class PacketState(MachineState):
             project_ssh_keys = [ kp.keypair_id ],
             spot_instance = defn.spotInstance,
             spot_price_max = defn.spotPriceMax,
-            tags=tags,
+            tags = nixops.packet_utils.dict2tags(tags)
         )
 
         self.vm_id = instance.id

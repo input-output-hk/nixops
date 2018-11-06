@@ -372,6 +372,9 @@ def xml_expr_to_python(node):
     elif node.tag == "int":
         return int(node.get("value"))
 
+    elif node.tag == "float":
+        return float(node.get("value"))
+
     elif node.tag == "null":
         return None
 
