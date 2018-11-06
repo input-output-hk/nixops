@@ -94,7 +94,15 @@ rec {
           pysqlite
           datadog
           digital-ocean
-          packet-python
+          (packet-python.overrideAttrs (old: {
+            src = pkgs.fetchFromGitHub {
+              owner = "input-output-hk";
+              repo = "packet-python";
+              rev = "5b26879e2d3d7656b1c4067a5f59976c450f753e";
+              sha256 = "0arimpldfgsqsw52rw0pndzbjf2ki6h24kl3pxlk2yihd9p8pnjj";
+            };
+            patches = [];
+          }))
         ];
 
       # For "nix-build --run-env".
