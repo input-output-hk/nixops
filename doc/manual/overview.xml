@@ -1510,18 +1510,36 @@ xlink:href="https://github.com/elitak/nixos-infect">nixos-infect</link>
 <section xml:id="sec-deploying-to-packet"><title>Deploying to Packet.net</title>
 
 <para><xref linkend="ex-trivial-packet.nix" /> shows how to run
-a packet.net instance. We only support instance creation and
-destruction at the moment.
+  a <literal>c1.small.x86</literal> packet.net instance in the <literal>ams1</literal>
+  region. A keypair is generated using the packet.net API
+  named <literal>mykeypair</literal>. Packet.net instances support a
+  nixops command called sos-console. This opens a serial console to the
+  instance that allows viewing details while system is booting and logging
+  in if SSH is broken. To login, you must know a user and password on the
+  system. To use run <literal>nixops sos-console -d depl machine1</literal>.
 </para>
 
-<example xml:id="ex-trivial-vultr.nix">
-  <title><filename>trivial-vultr.nix</filename>: A trivial vultr setup</title>
+<example xml:id="ex-trivial-packet.nix">
+  <title><filename>trivial-packet.nix</filename>: A trivial packet setup</title>
 <programlisting>
-{
-  machine = { config, pkgs, ... }: {
-    services.nginx.enable = true;
-    services.openssh.enable = true;
+let
+  accessKeyId = "YOURAPIKEY";
+  your-projid = "your-project-id-uuid";
 
+in {
+  network.description = "test-packet";
+  resources.packetKeyPairs.dummy = {
+    inherit accessKeyId;
+    project = your-projid;
+  };
+  machine-sam = { resources, ... }: {
+    deployment.packet = {
+      inherit accessKeyId;
+      keyPair = resources.packetKeyPairs.dummy;
+      facility = "ams1";
+      plan = "c1.small.x86";
+      project = your-projid;
+    };
     deployment.targetEnv = "packet";
   };
 }
