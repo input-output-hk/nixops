@@ -180,11 +180,12 @@ class PacketState(MachineState):
         return apikey
 
     def get_common_tags(self):
-        tags = {'CharonNetworkUUID': self.depl.uuid,
-                'CharonMachineName': self.name,
-                'CharonStateFile': "{0}@{1}:{2}".format(getpass.getuser(), socket.gethostname(), self.depl._db.db_file)}
+        tags = [ self.depl.uuid,
+                 self.name,
+                "{0}@{1}:{2}".format(getpass.getuser(), socket.gethostname(), self.depl._db.db_file),
+               ]
         if self.depl.name:
-            tags['CharonNetworkName'] = self.depl.name
+            tags[] = self.depl.name
         return tags
 
 
