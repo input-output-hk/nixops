@@ -65,7 +65,7 @@ in
         default = -1;
         type = types.float;
         description = ''
-          Price (in dollar cents per hour) to use for spot instances request for the machine.
+          Price (in dollars per hour) to use for spot instances request for the machine.
         '';
       };
       tags = mkOption {
