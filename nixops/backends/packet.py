@@ -107,6 +107,8 @@ class PacketState(MachineState):
                                allow_ssh_args=True, user=user))
 
     def get_physical_spec(self):
+        if self.key_pair == None:
+            raise Exception("Key Pair is not set")
         kp = self.findKeypairResource(self.key_pair)
         return Function("{ ... }", {
             ('config', 'boot', 'initrd', 'availableKernelModules'): [ "ata_piix", "uhci_hcd", "virtio_pci", "sr_mod", "virtio_blk" ],
@@ -228,7 +230,7 @@ class PacketState(MachineState):
 
             if instance is None:
                 if not allow_recreate:
-                    raise Exception("EC2 instance ‘{0}’ went away; use ‘--allow-recreate’ to create a new one".format(self.name))
+                    raise Exception("Packet.net instance ‘{0}’ went away; use ‘--allow-recreate’ to create a new one".format(self.name))
 
             if instance:
                 self.update_state(instance)
