@@ -31,7 +31,7 @@ in
         apply = x: if builtins.isString x then x else x.name;
         description = ''
           Needs to be TODO of existing keypair or a resource created
-          by nixops using `resources.packetKeyPairs.<name>`.
+          by nixops using `resources.packetKeyPairs.name`.
         '';
       };
       plan = mkOption {

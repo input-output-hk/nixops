@@ -185,7 +185,7 @@ class PacketState(MachineState):
                 "{0}@{1}:{2}".format(getpass.getuser(), socket.gethostname(), self.depl._db.db_file),
                ]
         if self.depl.name:
-            tags[] = self.depl.name
+            tags.append(self.depl.name)
         return tags
 
 
