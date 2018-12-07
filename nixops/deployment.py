@@ -570,6 +570,7 @@ class Deployment(object):
                         })
 
             merged = reduce(nixmerge, config) if len(config) > 0 else {}
+            r.dry_run = self.dry_run
             physical = r.get_physical_spec()
 
             if len(merged) == 0 and len(physical) == 0:
@@ -604,6 +605,7 @@ class Deployment(object):
         """Build the machine configurations in the Nix store."""
 
         self.logger.log("building all machine configurations...")
+        self.dry_run = dry_run
 
         # Set the NixOS version suffix, if we're building from Git.
         # That way ‘nixos-version’ will show something useful on the
