@@ -62,7 +62,7 @@ in
         '';
       };
       spotPriceMax = mkOption {
-        default = -1;
+        default = -1.0;
         type = types.float;
         description = ''
           Price (in dollars per hour) to use for spot instances request for the machine.
