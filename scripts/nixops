@@ -4,6 +4,7 @@
 from nixops import deployment
 from nixops.nix_expr import py2nix
 from nixops.parallel import MultipleExceptions, run_tasks
+import pluggy
 
 import nixops.statefile
 import prettytable
@@ -23,13 +24,13 @@ import syslog
 import json
 import pipes
 
-# For 14.04 user convenience.
-import libcloud.security
-if os.getenv('OPENSSL_X509_CERT_FILE') is not None:
-    libcloud.security.CA_CERTS_PATH.append(os.getenv('OPENSSL_X509_CERT_FILE'))
-
 from datetime import datetime
 from pprint import pprint
+import importlib
+
+from nixops.plugins import get_plugin_manager
+[[importlib.import_module(mod) for mod in pluginimports]
+     for pluginimports in get_plugin_manager().hook.load()]
 
 
 def create_table(headers):
