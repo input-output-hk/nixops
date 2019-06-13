@@ -6,7 +6,8 @@
 let
   pkgs = import nixpkgs { };
   version = "1.7" + (if officialRelease then "" else "pre${toString nixopsSrc.revCount}_${nixopsSrc.shortRev}");
-  vultr = import ../nixops-vultr/release.nix {};
+  packet = import ../nixops-packet/release.nix {};
+  aws = import ../nixops-aws/release.nix {};
 in
 
 rec {
@@ -69,7 +70,7 @@ rec {
           # Go back to sqlite once Python 2.7.13 is released
           pysqlite
           typing
-          vultr.build."${system}"
+          packet.build."${system}"
           pluggy
         ];
 
