@@ -6,7 +6,7 @@
 let
   pkgs = import nixpkgs { };
   version = "1.7" + (if officialRelease then "" else "pre${toString nixopsSrc.revCount}_${nixopsSrc.shortRev}");
-  aws = import ../../nixops-aws/release.nix {};
+  vultr = import ../nixops-vultr/release.nix {};
 in
 
 rec {
@@ -69,7 +69,7 @@ rec {
           # Go back to sqlite once Python 2.7.13 is released
           pysqlite
           typing
-          aws.build."${system}"
+          vultr.build."${system}"
           pluggy
         ];
 
@@ -80,7 +80,6 @@ rec {
       '';
 
       doCheck = true;
-#      doCheck = false;
 
       postCheck = ''
         # We have to unset PYTHONPATH here since it will pick enum34 which collides
