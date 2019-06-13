@@ -8,6 +8,7 @@ let
   version = "1.7" + (if officialRelease then "" else "pre${toString nixopsSrc.revCount}_${nixopsSrc.shortRev}");
   packet = import ../nixops-packet/release.nix {};
   aws = import ../nixops-aws/release.nix {};
+  vultr = import ../nixops-vultr/release.nix {};
 in
 
 rec {
@@ -70,6 +71,8 @@ rec {
           # Go back to sqlite once Python 2.7.13 is released
           pysqlite
           typing
+          aws.build."${system}"
+          vultr.build."${system}"
           packet.build."${system}"
           pluggy
         ];
