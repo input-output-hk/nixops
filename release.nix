@@ -6,7 +6,13 @@
 let
   pkgs = import nixpkgs { };
   version = "1.7" + (if officialRelease then "" else "pre${toString nixopsSrc.revCount}_${nixopsSrc.shortRev}");
-  aws = import ../../nixops-aws/release.nix {};
+  plugins = import ./data.nix;
+  toSrc = n: v:
+    pkgs.fetchFromGitHub {
+      inherit (v) owner repo sha256;
+      rev = "v${v.version}";
+    };
+
 in
 
 rec {
@@ -54,7 +60,7 @@ rec {
   build = pkgs.lib.genAttrs [ "x86_64-linux" "i686-linux" "x86_64-darwin" ] (system:
     with import nixpkgs { inherit system; };
 
-#    python2Packages.buildPythonApplication rec {
+#   python2Packages.buildPythonApplication rec {
     python2Packages.buildPythonPackage rec {
       name = "nixops-${version}";
 
@@ -62,16 +68,17 @@ rec {
 
       buildInputs = [ python2Packages.nose python2Packages.coverage ];
 
-#      nativeBuildInputs = [ pkgs.mypy ];
+#     nativeBuildInputs = [ pkgs.mypy ];
 
       propagatedBuildInputs = with python2Packages;
         [ prettytable
           # Go back to sqlite once Python 2.7.13 is released
           pysqlite
           typing
-          aws.build."${system}"
           pluggy
-        ];
+        ] ++ lib.mapAttrsToList (n: v:
+          (import ((toString (toSrc n v)) + "/release.nix") {}).build.${system})
+          plugins;
 
       # For "nix-build --run-env".
       shellHook = ''
@@ -80,19 +87,18 @@ rec {
       '';
 
       doCheck = true;
-#      doCheck = false;
 
+      # TODO: Disable myPy for hookspec
       postCheck = ''
         # We have to unset PYTHONPATH here since it will pick enum34 which collides
         # with python3 own module. This can be removed when nixops is ported to python3.
-        # PYTHONPATH= mypy --cache-dir=/dev/null nixops                                        # LOOK AT DISABLING myPy for just the hookspec syntax check
-
+        # PYTHONPATH= mypy --cache-dir=/dev/null nixops
         # smoke test
         HOME=$TMPDIR $out/bin/nixops --version
       '';
 
       # Needed by libcloud during tests
-#      SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      # SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
       # Add openssh to nixops' PATH. On some platforms, e.g. CentOS and RHEL
       # the version of openssh is causing errors when have big networks (40+)
