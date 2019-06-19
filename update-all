@@ -2,9 +2,9 @@
 #! nix-shell -i bash -p bash coreutils curl jq nix
 # vim: ft=sh sw=2 et
 #
-# This scripts scans the github nixops plugin provider repos for new releases,
-# generates the corresponding nix code and finally generates an index of
-# all the providers given in ./providers.txt.
+# This script scans the github nixops plugin repos for new releases,
+# and generates the corresponding nix code in ./all-plugins.txt as
+# an attribute set.
 set -euo pipefail
 
 # the maximum number of attempts before giving up inside of GET and prefetch_github
@@ -132,7 +132,7 @@ while read line; do
       add_repo "$org" "$repo"
     done
   fi
-done < <(grep -v '^#\|^$' providers.txt)
+done < <(grep -v '^#\|^$' all-plugins.txt)
 
 cat <<FOOTER >> data.nix
 }

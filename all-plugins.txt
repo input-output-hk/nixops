@@ -13,7 +13,7 @@
 input-output-hk/nixops-aws
 
 # include nixops-packet
-#input-output-hk/nixops-packet
+input-output-hk/nixops-packet
 
 # include nixops-vultr
-#disassembler/nixops-vultr
+disassembler/nixops-vultr
