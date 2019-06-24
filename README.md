@@ -20,11 +20,11 @@ To start developing on nixops, you can run:
 ```
 
 Where plugin1 can be any available nixops plugin, and where
-none or more than one can be specified.  An example is:
+none or more than one can be specified, including local plugins.  An example is:
 
 
 ```bash
-  $ ./dev-shell --arg p "(p: [ p.aws p.packet p.vultr ])"
+  $ ./dev-shell --arg p "(p: [ p.aws p.packet (p.callPackage ../myplugin/release.nix {})])"
 ```
 
 To update the available nixops plugins, edit the
@@ -40,8 +40,7 @@ The command to build NixOps depends on your platform and which plugins you choos
 - `nix-build release.nix -A build.i686-linux --arg p "(p: [ p.plugin1 ])"` on 32 bit linux.
 - `nix-build release.nix -A build.x86_64-darwin --arg p "(p: [ p.plugin1 ])"` on OSX.
 
-Similarly, using NixOps from another project (for instance a
-nix-shell) can be done using:
+Similarly, using NixOps from another project (for instance a nix-shell) can be done using:
 
 ```nix
 stdenv.mkDerivation {
