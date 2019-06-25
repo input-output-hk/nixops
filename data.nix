@@ -11,8 +11,8 @@
     {
       owner   = "input-output-hk";
       repo    = "nixops-packet";
-      version = "0.0.1";
-      sha256  = "1qzc15sj45bsvm0f78fqsfdrybbiyil52kffl5zlwd1ccsqi8m3b";
+      version = "0.0.2";
+      sha256  = "1wn0k4vsl7xmk8a8xfgfyz6bza5rpg9dfagc2qnfdwb5sgb7dv5f";
     };
   vultr =
     {
