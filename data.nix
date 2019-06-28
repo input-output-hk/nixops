@@ -7,6 +7,13 @@
       version = "0.0.1";
       sha256  = "0dppqqa9ag802mawz635v4b3vmg12dpghwz4dg6q8xh9hx7cycy7";
     };
+  hetzner =
+    {
+      owner   = "input-output-hk";
+      repo    = "nixops-hetzner";
+      version = "0.0.1";
+      sha256  = "1nvdx3p7xb7klb0c9jbfwq2mf8i1hxvwvxxaabjpby5sza8s0qf5";
+    };
   packet =
     {
       owner   = "input-output-hk";
