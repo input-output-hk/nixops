@@ -66,10 +66,6 @@ in rec {
     with import nixpkgs { inherit system; };
 
 
-    # Nixops upstream master utilizes a buildPythonApplication call whereas last year
-    # master was using a buildPythonPackage call.  This build method works with
-    # buildPythonPackage, but not buildPythonApplication.  Have not looked at why yet.
-
     python2Packages.buildPythonApplication rec {
       name = "nixops-${version}";
 
