@@ -12,11 +12,6 @@ parser.add_argument('--version', action='version', version='NixOps @version@')
 
 subparsers = parser.add_subparsers(help='sub-command help')
 
-subparser = subparsers.add_parser('list-plugins', help='list the available nixops plugins')
-subparser.set_defaults(op=op_list_plugins)
-subparser.add_argument('--verbose', '-v', action='store_true', help='Provide extra plugin information')
-subparser.add_argument('--debug', action='store_true', help='enable debug output')
-
 subparser = add_subparser(subparsers, 'list', help='list all known deployments')
 subparser.set_defaults(op=op_list_deployments)
 
@@ -232,7 +227,12 @@ subparser.add_argument('machine', help='identifier of the machine')
 subparser.add_argument('storepath', help='store path of the closure to be copied')
 subparser.set_defaults(op=op_copy_closure)
 
-op_parser_hooks(subparsers)
+subparser = subparsers.add_parser('list-plugins', help='list the available nixops plugins')
+subparser.set_defaults(op=op_list_plugins)
+subparser.add_argument('--verbose', '-v', action='store_true', help='Provide extra plugin information')
+subparser.add_argument('--debug', action='store_true', help='enable debug output')
+
+parser_plugin_hooks(parser, subparsers)
 
 if os.path.basename(sys.argv[0]) == "charon":
     sys.stderr.write(nixops.util.ansi_warn("warning: ‘charon’ is now called ‘nixops’") + "\n")

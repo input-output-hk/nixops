@@ -17,7 +17,7 @@ def nixexprs():
     """
 
 @hookspec
-def parser(subparsers):
+def parser(parser, subparsers):
     """ Extend the core nixops cli parser
     :return a set of plugin parser extensions
     """

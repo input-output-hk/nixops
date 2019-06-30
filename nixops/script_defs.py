@@ -107,7 +107,7 @@ def set_name(depl, name):
     depl.name = name
 
 
-def modify_deployment(args,depl):
+def modify_deployment(args, depl):
     nix_exprs = args.nix_exprs
     templates = args.templates or []
     for i in templates: nix_exprs.append("<nixops/templates/{0}.nix>".format(i))
@@ -794,5 +794,5 @@ def error(msg):
     sys.stderr.write(nixops.util.ansi_warn("error: ") + msg + "\n")
 
 
-def op_parser_hooks(subparsers):
-    pm.hook.parser(subparsers=subparsers)
+def parser_plugin_hooks(parser, subparsers):
+    pm.hook.parser(parser=parser, subparsers=subparsers)
