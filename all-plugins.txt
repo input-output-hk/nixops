@@ -14,3 +14,9 @@ input-output-hk/nixops-aws
 
 # include nixops-hetzner
 input-output-hk/nixops-hetzner
+
+# include nixops-packet
+input-output-hk/nixops-packet
+
+# include nixops-vultr
+disassembler/nixops-vultr
