@@ -103,6 +103,8 @@ let
       })
     ];
 
+    passthru.eval-machine-info = import ../nix/eval-machine-info.nix;
+
     # TODO: Manual build should be included via pyproject.toml
     postInstall = ''
       cp ${(import ./doc/manual { revision = "1.8"; nixpkgs = pkgs.path; }).optionsDocBook} doc/manual/machine-options.xml
