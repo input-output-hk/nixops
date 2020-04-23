@@ -40,7 +40,10 @@ let
     };
 
   in runCommandNoCC "${finalDrv.pname}-with-plugins-${finalDrv.version}" {
-    inherit (finalDrv) passthru meta;
+    inherit (finalDrv) meta;
+    passthru = {
+      eval-machine-info = import ./nix/eval-machine-info.nix;
+    } // finalDrv.passthru;
   } ''
     mkdir -p $out/bin
 
@@ -103,7 +106,7 @@ let
       })
     ];
 
-    passthru.eval-machine-info = import ../nix/eval-machine-info.nix;
+    passthru.eval-machine-info = import ./nix/eval-machine-info.nix;
 
     # TODO: Manual build should be included via pyproject.toml
     postInstall = ''
