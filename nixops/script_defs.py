@@ -339,31 +339,31 @@ def op_info(args):
         with deployment(args) as depl:
             do_eval(depl)
 
-        if args.plain:
-            print_deployment(depl)
-        else:
-            print("Network name:", depl.name or "(none)")
-            print("Network UUID:", depl.uuid)
-            print("Network description:", depl.description)
-            if depl.flake_uri is None:
-                print("Nix expressions:", " ".join(depl.nix_exprs))
-                if depl.nix_path != []:
-                    print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
+            if args.plain:
+                print_deployment(depl)
             else:
-                print("Flake URI:", depl.flake_uri)
-                if depl.cur_flake_uri is not None:
-                    print("Deployed flake URI:", depl.cur_flake_uri)
-            if depl.rollback_enabled:
-                print("Nix profile:", depl.get_profile())
-            if depl.args != {}:
-                print(
-                    "Nix arguments:",
-                    ", ".join([n + " = " + v for n, v in depl.args.items()]),
-                )
-            print()
-            tbl = create_table(table_headers)
-            print_deployment(depl)
-            print(tbl)
+                print("Network name:", depl.name or "(none)")
+                print("Network UUID:", depl.uuid)
+                print("Network description:", depl.description)
+                if depl.flake_uri is None:
+                    print("Nix expressions:", " ".join(depl.nix_exprs))
+                    if depl.nix_path != []:
+                        print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
+                else:
+                    print("Flake URI:", depl.flake_uri)
+                    if depl.cur_flake_uri is not None:
+                        print("Deployed flake URI:", depl.cur_flake_uri)
+                if depl.rollback_enabled:
+                    print("Nix profile:", depl.get_profile())
+                if depl.args != {}:
+                    print(
+                        "Nix arguments:",
+                        ", ".join([n + " = " + v for n, v in depl.args.items()]),
+                    )
+                print()
+                tbl = create_table(table_headers)
+                print_deployment(depl)
+                print(tbl)
 
 
 def op_check(args):
