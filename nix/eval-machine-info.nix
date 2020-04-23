@@ -13,6 +13,7 @@
 , uuid
 , deploymentName
 , args
+, evalFile ? false
 , pluginNixExprs ?
   with pkgs; with lib; pipe nixops.propagatedBuildInputs [
     (filter ({ name, ... }: hasPrefix "nixops-" name))
@@ -32,6 +33,8 @@
 with pkgs;
 with lib;
 
+let
+  expressions =
 rec {
   inherit pluginNixExprs networkExprs;
 
@@ -145,4 +148,8 @@ rec {
   getNixOpsArgs = fs: lib.zipAttrs (lib.unique (lib.concatMap fileToArgs (getNixOpsExprs fs)));
 
   nixopsArguments = getNixOpsArgs networkExprs;
-}
+};
+in
+  if evalFile != false
+  then (import evalFile) expressions
+  else expressions

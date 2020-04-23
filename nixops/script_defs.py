@@ -915,6 +915,13 @@ def op_show_option(args):
             )
         )
 
+def op_eval(args):
+    with deployment(args) as depl:
+        depl.evaluate()
+        sys.stdout.write(
+            depl.evaluate_code(args.code, json=args.json, strict=args.strict)
+        )
+
 
 @contextlib.contextmanager
 def deployment_with_rollback(args):

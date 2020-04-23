@@ -374,15 +374,6 @@ class Deployment:
         flags.extend(["-I", "nixops=" + self.expr_path])
         return flags
 
-    def _get_cur_flake_uri(self) -> str:
-        assert self.flake_uri is not None
-        if self._cur_flake_uri is None:
-            out = json.loads(subprocess.check_output(
-                ["nix", "flake", "info", "--json", "--", self.flake_uri],
-                stderr=self.logger.log_file))
-            self._cur_flake_uri = out['url'].replace("ref=HEAD&rev=0000000000000000000000000000000000000000&", "") # FIXME
-        return self._cur_flake_uri
-
 
     def _eval_flags(self, exprs: List[str]) -> List[str]:
         flags = self._nix_path_flags()
@@ -524,6 +515,38 @@ class Deployment:
                     y, config["resources"][res_type][name], res_type
                 )
                 self.definitions[name] = defn
+
+    def evaluate_code(
+        self,
+        code: str,
+        json: bool = False,
+        strict: bool = False
+    ) -> str:
+        """Evaluate nix code in the deployment specification."""
+
+        exprs = self.nix_exprs
+        phys_expr = self.tempdir + "/physical.nix"
+        with open(phys_expr, "w") as f:
+            f.write(self.get_physical_spec())
+        exprs.append(phys_expr)
+
+        try:
+            return subprocess.check_output(
+                ["nix-instantiate"]
+                + self.extra_nix_eval_flags
+                + self._eval_flags(exprs)
+                + [
+                    "--eval-only",
+                    "--arg", "checkConfigurationOptions", "false",
+                    "--arg", "evalFile", code,
+                ]
+                + (["--strict"] if strict else [])
+                + (["--json"]   if json   else []),
+                stderr=self.logger.log_file,
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            raise NixEvalError
 
     def evaluate_option_value(
         self,
