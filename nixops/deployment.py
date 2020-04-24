@@ -796,13 +796,13 @@ class Deployment:
         selected = [m for m in self.active.values() if should_do(m, include, exclude)]
 
         names = [m.name for m in selected]
+        remote_machines = []
 
         # If we're not running on Linux, then perform the build on the
         # target machines.  FIXME: Also enable this if we're on 32-bit
         # and want to deploy to 64-bit.
         if platform.system() != "Linux" and os.environ.get("NIX_REMOTE") != "daemon":
             if os.environ.get("NIX_REMOTE_SYSTEMS") == None:
-                remote_machines = []
                 for m in sorted(selected, key=lambda m: m.index):
                     key_file = m.get_ssh_private_key_file()
                     if not key_file:
