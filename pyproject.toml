@@ -2,6 +2,7 @@
 name = "nixops"
 version = "1.8.0"
 description = "NixOS cloud provisioning and deployment tool"
+homepage = "https://github.com/NixOS/nixops"
 authors = ["Eelco Dolstra <eelco.dolstra@logicblox.com>"]
 license = "LGPL-3.0-only"
 include = ["nix/*.nix", "nixops/py.typed" ]
