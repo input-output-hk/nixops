@@ -12,6 +12,7 @@ let
     finalDrv
     , interpreter
     , plugins
+    , givenPlugins
   }: let
 
     # The complete buildEnv drv
@@ -43,7 +44,7 @@ let
     inherit (finalDrv) meta;
     passthru = {
       eval-machine-info = import ./nix/eval-machine-info.nix;
-      propagatedBuildInputs = plugins;
+      propagatedBuildInputs = givenPlugins;
     } // finalDrv.passthru;
   } ''
     mkdir -p $out/bin
@@ -72,6 +73,7 @@ let
     passthru = old.passthru // {
       withPlugins = pluginFn: mkPluginDrv {
         plugins = [ finalDrv ] ++ pluginFn self;
+        givenPlugins = pluginFn self;
         inherit finalDrv;
         inherit interpreter;
       };
@@ -113,6 +115,8 @@ let
     postInstall = ''
       cp ${(import ./doc/manual { revision = "1.8"; nixpkgs = pkgs.path; }).optionsDocBook} doc/manual/machine-options.xml
       make -C doc/manual install docdir=$out/share/doc/nixops mandir=$out/share/man
+      mkdir -p $out/share/nix/nixops
+      cp -av nix/* $out/share/nix/nixops
     '';
 
   };

@@ -1,10 +1,7 @@
 { system ? builtins.currentSystem
 , nixpkgs ? if flakeUri != null then "${flakeNetwork.nixpkgs}" else <nixpkgs>
 , pkgs    ? import nixpkgs { inherit system; }
-, nixops  ? (import ../release.nix { nixpkgs = pkgs.path; p = (p: [
-  # (p.callPackage ../../nixops-aws/release.nix { officialRelease = true; })
-    p.aws
-  ]); }).build.${system}
+, nixops  ? pkgs.nixops
 , networkExprs
 , flakeUri ? null
 , flake ? builtins.getFlake flakeUri
@@ -14,9 +11,10 @@
 , deploymentName
 , args
 , evalFile ? false
+, pp ? v: __trace (__toJSON v) v
 , pluginNixExprs ?
-  with pkgs; with lib; pipe nixops.propagatedBuildInputs [
-    (filter ({ name, ... }: hasPrefix "nixops-" name))
+  with pkgs; with lib; pipe (pp nixops.propagatedBuildInputs) [
+    (filter ({ name, ... }: hasPrefix "nixops" name))
     (map (plugin: plugin + "/share/nix/${getName plugin}"))
   ]
   , call ? e: (rec {
@@ -38,7 +36,7 @@ let
 rec {
   inherit pluginNixExprs networkExprs;
 
-  importedPluginNixExprs          = map (expr: import expr) pluginNixExprs;
+  importedPluginNixExprs          = map (expr: import expr) (pp pluginNixExprs);
   pluginResources                 = map (e: e.resources) importedPluginNixExprs;
   pluginOptions                   = { imports = (foldl (a: e: a ++ e.options) [] importedPluginNixExprs); };
   pluginDeploymentConfigExporters = (foldl (a: e: a ++ (e.config_exporters { inherit optionalAttrs pkgs; })) [] importedPluginNixExprs);
