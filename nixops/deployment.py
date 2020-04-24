@@ -638,6 +638,11 @@ class Deployment:
 
             attrs_list = attrs_per_resource[m.name]
 
+            for m2 in active_resources.values():
+                ip = m.address_to(m2)
+                if ip:
+                    hosts[m.name][ip] += [m2.name, m2.name + "-unencrypted"]
+
             # Set system.stateVersion if the Nixpkgs version supports it.
             nixos_version = nixops.util.parse_nixos_version(defn.config["nixosRelease"])
             if nixos_version >= ["15", "09"]:
@@ -717,7 +722,7 @@ class Deployment:
                         config.append(
                             {
                                 ("services", "openssh", "knownHosts", m2.name): {
-                                    "hostNames": [m2.name,],
+                                    "hostNames": [m2.name + "-unencrypted", m2.name],
                                     "publicKey": m2.public_host_key,
                                 }
                             }
