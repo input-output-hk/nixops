@@ -43,7 +43,7 @@ let
     inherit (finalDrv) meta;
     passthru = {
       eval-machine-info = import ./nix/eval-machine-info.nix;
-      inherit plugins;
+      propagatedBuildInputs = plugins;
     } // finalDrv.passthru;
   } ''
     mkdir -p $out/bin
