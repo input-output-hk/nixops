@@ -38,7 +38,7 @@ let
 rec {
   inherit pluginNixExprs networkExprs;
 
-  importedPluginNixExprs          = map (expr: import expr) (traceVal pluginNixExprs);
+  importedPluginNixExprs          = map (expr: import expr) pluginNixExprs;
   pluginResources                 = map (e: e.resources) importedPluginNixExprs;
   pluginOptions                   = { imports = (foldl (a: e: a ++ e.options) [] importedPluginNixExprs); };
   pluginDeploymentConfigExporters = (foldl (a: e: a ++ (e.config_exporters { inherit optionalAttrs pkgs; })) [] importedPluginNixExprs);
