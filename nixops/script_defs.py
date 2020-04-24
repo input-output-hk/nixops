@@ -100,32 +100,26 @@ def one_or_all(
 
 def op_list_deployments(args):
     with network_state(args) as sf:
-        sorted_deployments = sort_deployments(sf.get_all_deployments())
-
-        if args.plain:
-            for depl in sorted_deployments:
-                print("\t".join([depl.uuid, depl.name]))
-        else:
-            tbl = create_table(
+        tbl = create_table(
+            [
+                ("UUID", "l"),
+                ("Name", "l"),
+                ("Description", "l"),
+                ("# Machines", "r"),
+                ("Type", "c"),
+            ]
+        )
+        for depl in sort_deployments(sf.get_all_deployments()):
+            tbl.add_row(
                 [
-                    ("UUID", "l"),
-                    ("Name", "l"),
-                    ("Description", "l"),
-                    ("# Machines", "r"),
-                    ("Type", "c"),
+                    depl.uuid,
+                    depl.name or "(none)",
+                    depl.description,
+                    len(depl.machines),
+                    ", ".join(set(m.get_type() for m in depl.machines.values())),
                 ]
             )
-            for depl in sort_deployments(sf.get_all_deployments()):
-                tbl.add_row(
-                    [
-                        depl.uuid,
-                        depl.name or "(none)",
-                        depl.description,
-                        len(depl.machines),
-                        ", ".join(set(m.get_type() for m in depl.machines.values())),
-                    ]
-                )
-            print(tbl)
+        print(tbl)
 
 
 def open_deployment(sf: nixops.statefile.StateFile, args: Namespace):
@@ -165,24 +159,12 @@ def set_name(depl: nixops.deployment.Deployment, name: Optional[str]):
 def modify_deployment(args, depl: nixops.deployment.Deployment):
     nix_exprs = args.nix_exprs
     templates = args.templates or []
-    if args.flake is None:
-        for i in templates:
-            nix_exprs.append("<nixops/templates/{0}.nix>".format(i))
-        if len(nix_exprs) == 0:
-            raise Exception("you must specify the path to a Nix expression and/or use ‘-t’")
-        depl.nix_exprs = [os.path.abspath(x) if x[0:1] != "<" else x for x in nix_exprs]
-        depl.nix_path = [nixops.util.abs_nix_path(x) for x in sum(args.nix_path or [], [])]
-    else:
-        if len(nix_exprs):
-            raise Exception("you cannot specify a Nix expression in conjunction with '--flake'")
-        if args.nix_path:
-            raise Exception("you cannot specify a Nix search path ('-I') in conjunction with '--flake'")
-        if len(templates) != 0:
-            raise Exception("you cannot specify a template ('-t') in conjunction with '--flake'")
-        # FIXME: should absolutize args.flake if it's a local path.
-        depl.flake_uri = args.flake
-        depl.nix_exprs = []
-        depl.nix_path = []
+    for i in templates:
+        nix_exprs.append("<nixops/templates/{0}.nix>".format(i))
+    if len(nix_exprs) == 0:
+        raise Exception("you must specify the path to a Nix expression and/or use ‘-t’")
+    depl.nix_exprs = [os.path.abspath(x) if x[0:1] != "<" else x for x in nix_exprs]
+    depl.nix_path = [nixops.util.abs_nix_path(x) for x in sum(args.nix_path or [], [])]
 
 
 def op_create(args):
@@ -345,14 +327,9 @@ def op_info(args):
                 print("Network name:", depl.name or "(none)")
                 print("Network UUID:", depl.uuid)
                 print("Network description:", depl.description)
-                if depl.flake_uri is None:
-                    print("Nix expressions:", " ".join(depl.nix_exprs))
-                    if depl.nix_path != []:
-                        print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
-                else:
-                    print("Flake URI:", depl.flake_uri)
-                    if depl.cur_flake_uri is not None:
-                        print("Deployed flake URI:", depl.cur_flake_uri)
+                print("Nix expressions:", " ".join(depl.nix_exprs))
+                if depl.nix_path != []:
+                    print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
                 if depl.rollback_enabled:
                     print("Nix profile:", depl.get_profile())
                 if depl.args != {}:
@@ -758,7 +735,7 @@ def op_export(args):
     with one_or_all(args) as depls:
         for depl in depls:
             res[depl.uuid] = depl.export()
-    print(json.dumps(res, indent=2, sort_keys=True))
+    print(json.dumps(res, indent=2, sort_keys=True, cls=nixops.util.NixopsEncoder))
 
 
 def op_import(args):
@@ -914,6 +891,7 @@ def op_show_option(args):
                 include_physical=args.include_physical,
             )
         )
+
 
 def op_eval(args):
     with deployment(args) as depl:
@@ -1168,12 +1146,7 @@ def add_common_modify_options(subparser: ArgumentParser):
         metavar="TEMPLATE",
         help="name of template to be used",
     )
-    subparser.add_argument(
-        '--flake',
-        dest="flake",
-        metavar='FLAKE_URI',
-        help='URI of the flake that defines the network',
-    )
+
 
 def add_common_deployment_options(subparser: ArgumentParser):
     subparser.add_argument(
