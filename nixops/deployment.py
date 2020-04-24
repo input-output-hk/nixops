@@ -884,9 +884,9 @@ class Deployment:
             if not should_do(m, include, exclude):
                 return
             m.logger.log("copying closure...")
-            m.new_toplevel = os.path.realpath(configs_path + "/" + m.name)
+            m.new_toplevel = os.path.realpath(os.path.join(configs_path.decode('utf-8'), m.name))
             if not os.path.exists(m.new_toplevel):
-                raise Exception("can't find closure of machine ‘{0}’".format(m.name))
+                raise Exception(f"can't find closure of machine ‘{m.name}’ at '{m.new_toplevel}'")
             m.copy_closure_to(m.new_toplevel)
 
         nixops.parallel.run_tasks(
