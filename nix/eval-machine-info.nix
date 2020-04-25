@@ -11,9 +11,8 @@
 , deploymentName
 , args
 , evalFile ? false
-, pp ? v: __trace (__toJSON v) v
 , pluginNixExprs ?
-  with pkgs; with lib; pipe (pp nixops.propagatedBuildInputs) [
+  with pkgs; with lib; pipe nixops.propagatedBuildInputs [
     (filter ({ name, ... }: hasPrefix "nixops" name))
     (map (plugin: plugin + "/share/nix/${getName plugin}"))
   ]
@@ -36,7 +35,7 @@ let
 rec {
   inherit pluginNixExprs networkExprs;
 
-  importedPluginNixExprs          = map (expr: import expr) (pp pluginNixExprs);
+  importedPluginNixExprs          = map (expr: import expr) pluginNixExprs;
   pluginResources                 = map (e: e.resources) importedPluginNixExprs;
   pluginOptions                   = { imports = (foldl (a: e: a ++ e.options) [] importedPluginNixExprs); };
   pluginDeploymentConfigExporters = (foldl (a: e: a ++ (e.config_exporters { inherit optionalAttrs pkgs; })) [] importedPluginNixExprs);
