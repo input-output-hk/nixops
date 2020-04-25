@@ -100,26 +100,32 @@ def one_or_all(
 
 def op_list_deployments(args):
     with network_state(args) as sf:
-        tbl = create_table(
-            [
-                ("UUID", "l"),
-                ("Name", "l"),
-                ("Description", "l"),
-                ("# Machines", "r"),
-                ("Type", "c"),
-            ]
-        )
-        for depl in sort_deployments(sf.get_all_deployments()):
-            tbl.add_row(
+        sorted_deployments = sort_deployments(sf.get_all_deployments())
+
+        if args.plain:
+            for depl in sorted_deployments:
+                print("\t".join([depl.uuid, depl.name]))
+        else:
+            tbl = create_table(
                 [
-                    depl.uuid,
-                    depl.name or "(none)",
-                    depl.description,
-                    len(depl.machines),
-                    ", ".join(set(m.get_type() for m in depl.machines.values())),
+                    ("UUID", "l"),
+                    ("Name", "l"),
+                    ("Description", "l"),
+                    ("# Machines", "r"),
+                    ("Type", "c"),
                 ]
             )
-        print(tbl)
+            for depl in sort_deployments(sf.get_all_deployments()):
+                tbl.add_row(
+                    [
+                        depl.uuid,
+                        depl.name or "(none)",
+                        depl.description,
+                        len(depl.machines),
+                        ", ".join(set(m.get_type() for m in depl.machines.values())),
+                    ]
+                )
+            print(tbl)
 
 
 def open_deployment(sf: nixops.statefile.StateFile, args: Namespace):
