@@ -67,7 +67,7 @@ rec {
     machines =
       flip mapAttrs nodes (n: v': let v = scrubOptionValue v'; in
       foldr (a: b: a // b)
-        { inherit (v.deployment) targetEnv targetPort targetHost alwaysActivate owners keys hasFastConnection;
+        { inherit (v.deployment) targetEnv targetPort targetHost encryptedLinksTo storeKeysOnMachine alwaysActivate owners keys hasFastConnection;
           nixosRelease = v.system.nixos.release or v.system.nixosRelease or (removeSuffix v.system.nixosVersionSuffix v.system.nixosVersion);
           publicIPv4 = v.networking.publicIPv4;
         } (map (f: f v) pluginDeploymentConfigExporters));
