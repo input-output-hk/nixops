@@ -629,7 +629,7 @@ class Deployment:
         )
 
         def index_to_private_ip(index: int) -> str:
-            n = 105 + index / 256
+            n = 105 + index // 256
             assert n <= 255
             return "192.168.{0}.{1}".format(n, index % 256)
 
