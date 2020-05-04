@@ -464,7 +464,7 @@ class Deployment:
                 stderr=self.logger.log_file,
             )
             if DEBUG:
-                print("XML output of nix-instantiate:\n" + xml, file=sys.stderr)
+                print("XML output of nix-instantiate:\n" + xml.decode(), file=sys.stderr)
         except OSError as e:
             raise Exception("unable to run ‘nix-instantiate’: {0}".format(e))
         except subprocess.CalledProcessError:
@@ -484,7 +484,7 @@ class Deployment:
             try:
                 (_, config) = self.evaluate_config("info.network")
             except Exception as e:
-                if action not in ("destroy", "delete"):
+                if action not in ("destroy", "delete", "eval"):
                     raise e
                 config = {}
             self.description = config.get("description", self.default_description)
