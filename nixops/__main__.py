@@ -542,6 +542,11 @@ subparser.add_argument(
 subparser.add_argument(
     "--strict", action="store_true", help="enable strict evaluation"
 )
+subparser.add_argument(
+    "--include-physical",
+    action="store_true",
+    help="include the physical specification in the evaluation",
+)
 
 subparser = add_subparser(
     subparsers,

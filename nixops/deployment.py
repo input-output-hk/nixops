@@ -464,7 +464,7 @@ class Deployment:
                 stderr=self.logger.log_file,
             )
             if DEBUG:
-                print("XML output of nix-instantiate:\n" + xml, file=sys.stderr)
+                print("XML output of nix-instantiate:\n" + xml.decode(), file=sys.stderr)
         except OSError as e:
             raise Exception("unable to run ‘nix-instantiate’: {0}".format(e))
         except subprocess.CalledProcessError:
@@ -520,15 +520,17 @@ class Deployment:
         self,
         code: str,
         json: bool = False,
-        strict: bool = False
+            strict: bool = False,
+        include_physical: bool = False,
     ) -> str:
         """Evaluate nix code in the deployment specification."""
 
         exprs = self.nix_exprs
-        phys_expr = self.tempdir + "/physical.nix"
-        with open(phys_expr, "w") as f:
-            f.write(self.get_physical_spec())
-        exprs.append(phys_expr)
+        if include_physical:
+            phys_expr = self.tempdir + "/physical.nix"
+            with open(phys_expr, "w") as f:
+                f.write(self.get_physical_spec())
+            exprs.append(phys_expr)
 
         try:
             return subprocess.check_output(
