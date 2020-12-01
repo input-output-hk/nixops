@@ -42,25 +42,7 @@
       '';
     };
 
-    defaultPackage = let
-      overrides = import ./overrides.nix { inherit pkgs; };
-
-    in pkgs.poetry2nix.mkPoetryApplication {
-      projectDir = ./.;
-
-      propagatedBuildInputs = [
-        pkgs.openssh
-        pkgs.rsync
-      ];
-
-      overrides = [
-        pkgs.poetry2nix.defaultPoetryOverrides
-        overrides
-      ];
-
-      passthru.evalMachineInfo = import ./nix/eval-machine-info.nix;
-      # TODO: Re-add manual build
-    };
+    defaultPackage = pkgs.callPackage ./package.nix {};
 
     nixosOptions = pkgs.nixosOptionsDoc {
       inherit (pkgs.lib.fixMergeModules [ ./nix/options.nix ] {
