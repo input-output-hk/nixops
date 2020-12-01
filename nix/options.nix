@@ -13,8 +13,6 @@ in
   imports =
     [
       ./ssh-tunnel.nix
-      ./auto-raid0.nix
-      ./auto-luks.nix
       ./keys.nix
     ];
 

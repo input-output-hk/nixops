@@ -4,7 +4,7 @@ let
 
   pkgs = import nixpkgs { system = "x86_64-linux"; };
 
-  systemModule = pkgs.lib.fixMergeModules [ ../../nix/options.nix ./dummy.nix ] {
+  systemModule = pkgs.lib.fixMergeModules [ ../../nix/options.nix ] {
                    inherit pkgs; utils = {};
                    resources = { gceImages.bootstrap = {}; };
                    name = "<name>"; uuid = "<uuid>";
