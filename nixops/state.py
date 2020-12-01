@@ -2,7 +2,9 @@ import json
 import collections
 import sqlite3
 import nixops.util
-from typing import Any, List, Iterator, AbstractSet, Tuple
+from typing import Any, List, Iterator, AbstractSet, Tuple, NewType
+
+RecordId = NewType("RecordId", str)
 
 
 class StateDict(collections.MutableMapping):
@@ -11,8 +13,8 @@ class StateDict(collections.MutableMapping):
        a python dict like behavior for the NixOps state file.
     """
 
-    # TODO implement __repr__ for convenience e.g debuging the structure
-    def __init__(self, depl, id: str):
+    # TODO implement __repr__ for convenience e.g debugging the structure
+    def __init__(self, depl, id: RecordId):
         super(StateDict, self).__init__()
         self._db: sqlite3.Connection = depl._db
         self.id = id
@@ -20,15 +22,15 @@ class StateDict(collections.MutableMapping):
     def __setitem__(self, key: str, value: Any) -> None:
         with self._db:
             c = self._db.cursor()
-            if value == None:
+            if value is None:
                 c.execute(
                     "delete from ResourceAttrs where machine = ? and name = ?",
                     (self.id, key),
                 )
             else:
                 v = value
-                if isinstance(value, list):
-                    v = json.dumps(value)
+                if isinstance(value, list) or isinstance(value, dict):
+                    v = json.dumps(value, cls=nixops.util.NixopsEncoder)
                 c.execute(
                     "insert or replace into ResourceAttrs(machine, name, value) values (?, ?, ?)",
                     (self.id, key, v),
@@ -42,7 +44,7 @@ class StateDict(collections.MutableMapping):
                 (self.id, key),
             )
             row: Tuple[str] = c.fetchone()
-            if row != None:
+            if row is not None:
                 try:
                     return json.loads(row[0])
                 except ValueError:

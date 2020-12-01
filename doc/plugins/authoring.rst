@@ -1,5 +1,5 @@
 Authoring a Plugin
-====
+==================
 
 NixOps plugins extend NixOps core to support additional hosting
 providers and resource types.
@@ -16,7 +16,7 @@ This guide is light on the details, and intends to describe just the
 supported hooks and integration process.
 
 Packaging with Poetry and poetry2nix
-====
+------------------------------------
 
 NixOps and its plugins are packaged as standard Python applications.
 Most packages will use `Poetry <https://python-poetry.org>`_ and
@@ -60,7 +60,7 @@ and ``pyproject.toml`` may cause confusing build errors. Only use a
   build-backend = "poetry.masonry.api"
 
 Important Notes
-----
+***************
 
 1. If you have a ``setup.py``, delete it now.
 2. If your plugin is named ``nixops_neatcloud``, the source directory
@@ -107,14 +107,58 @@ Important Notes
 
    .. code-block:: python
 
-     @nixops.plugins.hookimpl
-     def nixexprs():
-         return [
-             os.path.dirname(os.path.abspath(__file__)) + "/nix"
-         ]
+     from nixops.plugins import Plugin
+
+     class NeatCloudPlugin(Plugin):
+
+         @staticmethod
+         def nixexprs():
+             return [
+                 os.path.dirname(os.path.abspath(__file__)) + "/nix"
+             ]
+
+5. Resource subclasses must now work with Python objects instead of XML
+
+   This old-style ResourceDefinition subclass:
+
+   .. code-block:: python
+
+     class NeatCloudMachineDefinition(nixops.resources.ResourceDefinition):
+
+         def __init__(self, xml):
+             super().__init__(xml)
+             self.store_keys_on_machine = (
+                 xml.find("attrs/attr[@name='storeKeysOnMachine']/bool").get("value")
+                 == "true"
+             )
+
+   Should now look like:
+
+   .. code-block:: python
+
+     class NeatCloudMachineOptions(nixops.resources.ResourceOptions):
+         storeKeysOnMachine: bool
+
+     class NeatCloudMachineDefinition(nixops.resources.ResourceDefinition):
+
+         config: MachineOptions
+
+         store_keys_on_machine: bool
+
+         def __init__(self, name: str, config: nixops.resources.ResourceEval):
+             super().__init__(name, config)
+             self.store_keys_on_machine = config.storeKeysOnMachine
+
+   ``ResourceEval`` is an immutable ``typing.Mapping`` implementation.
+   Also note that ``ResourceEval`` has turned Nix lists into Python tuples, dictionaries into ResourceEval objects and so on.
+   ``typing.Tuple`` cannot be used as it's fixed-size, use ``typing.Sequence`` instead.
+
+   ``ResourceOptions`` is an immutable object that provides type validation both with ``mypy`` _and_ at runtime.
+   Any attributes which are not explicitly typed are passed through as-is.
+
 
 On with Poetry
-----
+**************
 
 Now create your first ``poetry.lock`` file with ``poetry lock``::
 
@@ -196,7 +240,7 @@ At this point, you can develop your plugin from within this shell,
 running ``nixops`` and ``mypy nixops_neatcloud``./
 
 Plug-in Loading
-=====
+---------------
 
 NixOps uses `Pluggy <https://pluggy.readthedocs.io/en/latest/>`_ to
 discover and load plugins. The glue which hooks things together is in
@@ -210,8 +254,31 @@ discover and load plugins. The glue which hooks things together is in
 NixOps implements a handful of hooks which your plugin can integrate
 with. See ``nixops/plugins/hookspec.py`` for a complete list.
 
+Defining a plugin
+-----------------
+
+To define a plugin you need to inherit from the `Plugin` base class and
+return it in the appropriate plugin hook:
+
+.. code-block:: python
+
+  from nixops.plugins import Plugin
+  import nixops.plugins
+
+  class NeatCloudPlugin(Plugin):
+
+      @staticmethod
+      def nixexprs():
+          return [ ]  # List of paths to nix expressions
+
+  @nixops.plugins.hookimpl
+  def plugin():
+      return NeatCloudPlugin()
+
+
+
 Developing NixOps and a plugin at the same time
-====
+-----------------------------------------------
 
 In this case you want a mutable copy of NixOps and your plugin. Since
 we are developing the plugin like any other Python program, we can
@@ -224,14 +291,14 @@ specify a relative path to NixOps's source in the pyproject.toml:
 Then run `poetry lock; poetry install; poetry shell` like normal.
 
 Troubleshooting
-====
+---------------
 
 If you run in to trouble, you might try deleting some things::
 
   $ rm -rf nixops_neatcloud.egg-info pip-wheel-metadata/
 
 Building a dependency fails
-----
+---------------------------
 
 First, run your ``nix-shell`` or ``nix-build`` with ``--keep-going``
 and then again with ``--jobs 1`` to isolate the cause. The first run
@@ -258,7 +325,7 @@ If a dependency is missing, add the dependency to your
 ``pyproject.toml``, and add an override like the Toml example for Zipp.
 
 Zipp can't find toml
-----
+********************
 
 Add zipp to your ``overrides.nix``, providing toml explicitly:
 
@@ -275,7 +342,7 @@ Add zipp to your ``overrides.nix``, providing toml explicitly:
   }
 
 FileNotFoundError: [Errno 2] No such file or directory: 'setup.py'
-----
+******************************************************************
 
 This dependency needs to be built in the ``pyproject`` format, which
 means it will also need poetry as a dependency. Add this to your

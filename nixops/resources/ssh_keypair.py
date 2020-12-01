@@ -9,6 +9,8 @@ import nixops.resources
 class SSHKeyPairDefinition(nixops.resources.ResourceDefinition):
     """Definition of an SSH key pair."""
 
+    config: nixops.resources.ResourceOptions
+
     @classmethod
     def get_type(cls):
         return "ssh-keypair"
@@ -17,14 +19,14 @@ class SSHKeyPairDefinition(nixops.resources.ResourceDefinition):
     def get_resource_type(cls):
         return "sshKeyPairs"
 
-    def __init__(self, xml):
-        nixops.resources.ResourceDefinition.__init__(self, xml)
+    def __init__(self, name: str, config: nixops.resources.ResourceEval):
+        super().__init__(name, config)
 
     def show_type(self):
         return "{0}".format(self.get_type())
 
 
-class SSHKeyPairState(nixops.resources.ResourceState):
+class SSHKeyPairState(nixops.resources.ResourceState[SSHKeyPairDefinition]):
     """State of an SSH key pair."""
 
     state = nixops.util.attr_property(
@@ -41,14 +43,20 @@ class SSHKeyPairState(nixops.resources.ResourceState):
         nixops.resources.ResourceState.__init__(self, depl, name, id)
         self._conn = None
 
-    def create(self, defn, check, allow_reboot, allow_recreate):
+    def create(
+        self,
+        defn: SSHKeyPairDefinition,
+        check: bool,
+        allow_reboot: bool,
+        allow_recreate: bool,
+    ):
         # Generate the key pair locally.
         if not self.public_key:
             (private, public) = nixops.util.create_key_pair(type="ed25519")
             with self.depl._db:
                 self.public_key = public
                 self.private_key = private
-                self.state = state = nixops.resources.ResourceState.UP
+                self.state = nixops.resources.ResourceState.UP
 
     def prefix_definition(self, attr):
         return {("resources", "sshKeyPairs"): attr}

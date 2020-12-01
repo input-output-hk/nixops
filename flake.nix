@@ -1,162 +1,131 @@
 {
-  description = "A tool for deploying NixOS machines in a network or cloud";
+  description = "NixOps: a tool for deploying to [NixOS](https://nixos.org) machines in a network or the cloud";
 
-  edition = 201909;
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  inputs.nixops-aws = {
-    uri = github:kreisys/nixops-aws;
-    flake = false;
-  };
+  inputs.utils.url = "github:numtide/flake-utils";
 
-  inputs.nixops-hetzner = {
-    uri = github:NixOS/nixops-hetzner;
-    flake = false;
-  };
+  outputs = { self, nixpkgs, utils }: utils.lib.eachDefaultSystem (system: let
+    pkgs = import nixpkgs { inherit system; };
 
-  outputs = { self, nixpkgs, nixops-aws, nixops-hetzner }:
-    let
+    pythonEnv = (pkgs.poetry2nix.mkPoetryEnv {
+      projectDir = ./.;
+    });
+    linters.doc = pkgs.writers.writeBashBin "lint-docs" ''
+      set -eux
+      # When running it in the Nix sandbox, there is no git repository
+      # but sources are filtered.
+      if [ -d .git ];
+      then
+          FILES=$(${pkgs.git}/bin/git ls-files)
+      else
+          FILES=$(find .)
+      fi
+      echo "$FILES" | xargs ${pkgs.codespell}/bin/codespell -L keypair,iam,hda
+      ${pythonEnv}/bin/sphinx-build -M clean doc/ doc/_build
+      ${pythonEnv}/bin/sphinx-build -n doc/ doc/_build
+      '';
 
-      systems = [ "x86_64-linux" "x86_64-darwin" ];
+  in {
+    devShell = pkgs.mkShell {
+      buildInputs = [
+        pythonEnv
+        pkgs.openssh
+        pkgs.poetry
+        pkgs.rsync  # Included by default on NixOS
+        pkgs.nixFlakes
+        pkgs.codespell
+      ] ++ (builtins.attrValues linters);
 
-      forAllSystems =
-        f: nixpkgs.lib.genAttrs systems (system: f system);
-
-      pkgsFor = system: import nixpkgs {
-        inherit system;
-        overlays = [ self.overlay ];
-      };
-
-      officialRelease = true;
-
-      version = "1.7" + (if officialRelease then "" else "pre${builtins.substring 0 8 self.lastModified}.${self.shortRev or "dirty"}");
-
-      pkgs = pkgsFor "x86_64-linux";
-
-    in {
-
-      overlay = final: prev: {
-
-        nixops = with final; python2Packages.buildPythonApplication rec {
-          name = "nixops-${version}";
-
-          src = "${self.hydraJobs.tarball}/tarballs/*.tar.bz2";
-
-          buildInputs = [ python2Packages.nose python2Packages.coverage ];
-
-          nativeBuildInputs = [ mypy ];
-
-          propagatedBuildInputs = with python2Packages;
-            [ prettytable
-              # Go back to sqlite once Python 2.7.13 is released
-              pysqlite
-              typing
-              pluggy
-              (import (nixops-aws + "/release.nix") {
-                nixpkgs = final.path;
-                src = nixops-aws;
-              }).build.${final.system}
-              (import (nixops-hetzner + "/release.nix") {
-                nixpkgs = final.path;
-                src = nixops-hetzner;
-              }).build.${final.system}
-            ];
-
-          # For "nix dev-shell".
-          shellHook = ''
-            export PYTHONPATH=$(pwd):$PYTHONPATH
-            export PATH=$(pwd)/scripts:${openssh}/bin:$PATH
-          '';
-
-          doCheck = true;
-
-          postCheck = ''
-            # We have to unset PYTHONPATH here since it will pick enum34 which collides
-            # with python3 own module. This can be removed when nixops is ported to python3.
-            PYTHONPATH= mypy --cache-dir=/dev/null nixops
-            # smoke test
-            HOME=$TMPDIR $out/bin/nixops --version
-          '';
-
-          # Needed by libcloud during tests.
-          SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
-
-          # Add openssh to nixops' PATH. On some platforms, e.g. CentOS and RHEL
-          # the version of openssh is causing errors with big networks (40+).
-          makeWrapperArgs = ["--prefix" "PATH" ":" "${openssh}/bin" "--set" "PYTHONPATH" ":"];
-
-          postInstall =
-            ''
-              # Backward compatibility symlink.
-              ln -s nixops $out/bin/charon
-
-              make -C doc/manual install \
-                docdir=$out/share/doc/nixops mandir=$out/share/man
-
-              mkdir -p $out/share/nix/nixops
-              cp -av nix/* $out/share/nix/nixops
-            '';
-        };
-
-      };
-
-      hydraJobs = {
-
-        build = forAllSystems (system: (pkgsFor system).nixops);
-
-        tarball = pkgs.releaseTools.sourceTarball {
-          name = "nixops-tarball";
-
-          src = self;
-
-          inherit version;
-
-          officialRelease = true; # hack
-
-          buildInputs = [ pkgs.git pkgs.libxslt pkgs.docbook5_xsl ];
-
-          postUnpack = ''
-            # Clean up when building from a working tree.
-            if [ -d $sourceRoot/.git ]; then
-              (cd $sourceRoot && (git ls-files -o | xargs -r rm -v))
-            fi
-          '';
-
-          distPhase =
-            ''
-              # Generate the manual and the man page.
-              cp ${(import ./doc/manual { revision = self.rev or "dirty"; inherit nixpkgs; }).optionsDocBook} doc/manual/machine-options.xml
-
-              for i in scripts/nixops setup.py doc/manual/manual.xml; do
-                substituteInPlace $i --subst-var-by version ${version}
-              done
-
-              make -C doc/manual install docdir=$out/manual mandir=$TMPDIR/man
-
-              releaseName=nixops-$VERSION
-              mkdir ../$releaseName
-              cp -prd . ../$releaseName
-              rm -rf ../$releaseName/.git
-              mkdir $out/tarballs
-              tar  cvfj $out/tarballs/$releaseName.tar.bz2 -C .. $releaseName
-
-              echo "doc manual $out/manual manual.html" >> $out/nix-support/hydra-build-products
-            '';
-        };
-
-        tests.none_backend = (import ./tests/none-backend.nix {
-          inherit nixpkgs;
-          nixops = pkgs.nixops;
-          system = "x86_64-linux";
-        }).test;
-      };
-
-      checks.build = self.hydraJobs.build.x86_64-linux;
-
-      packages = forAllSystems (system: {
-        inherit (pkgsFor system) nixops;
-      });
-
-      defaultPackage = forAllSystems (system: self.packages.${system}.nixops);
-
+      shellHook = ''
+        export PATH=${builtins.toString ./scripts}:$PATH
+      '';
     };
+
+    defaultPackage = let
+      overrides = import ./overrides.nix { inherit pkgs; };
+
+    in pkgs.poetry2nix.mkPoetryApplication {
+      projectDir = ./.;
+
+      propagatedBuildInputs = [
+        pkgs.openssh
+        pkgs.rsync
+      ];
+
+      overrides = [
+        pkgs.poetry2nix.defaultPoetryOverrides
+        overrides
+      ];
+
+      # TODO: Re-add manual build
+    };
+
+    nixosOptions = pkgs.nixosOptionsDoc {
+      inherit (pkgs.lib.fixMergeModules [ ./nix/options.nix ] {
+        inherit pkgs;
+        name = "<name>";
+        uuid = "<uuid>";
+      }) options;
+    };
+
+    rstNixosOptions = let
+      oneRstOption = name: value: ''
+        ${name}
+        ${pkgs.lib.concatStrings (builtins.genList (_: "-") (builtins.stringLength name))}
+
+        ${value.description}
+
+        ${pkgs.lib.optionalString (value ? readOnly) ''
+          Read Only
+        ''}
+
+        :Type: ${value.type}
+
+        ${pkgs.lib.optionalString (value ? default) ''
+          :Default: ${builtins.toJSON value.default}
+        ''}
+
+        ${pkgs.lib.optionalString (value ? example) ''
+          :Example: ${builtins.toJSON value.example}
+        ''}
+      '';
+      text = ''
+        NixOps Options
+        ==============
+      '' + pkgs.lib.concatStringsSep "\n" (pkgs.lib.mapAttrsToList oneRstOption self.nixosOptions.${pkgs.system}.optionsNix);
+    in pkgs.writeText "options.rst" text;
+
+    docs = pkgs.stdenv.mkDerivation {
+      name = "nixops-docs";
+      # we use cleanPythonSources because the default gitignore
+      # implementation doesn't support the restricted evaluation
+      src = pkgs.poetry2nix.cleanPythonSources {
+        src = ./.;
+      };
+
+      buildPhase = ''
+        cp ${self.rstNixosOptions.${pkgs.system}} doc/manual/options.rst
+        ${pythonEnv}/bin/sphinx-build -M clean doc/ doc/_build
+        ${pythonEnv}/bin/sphinx-build -n doc/ doc/_build
+      '';
+
+      installPhase = ''
+        mv doc/_build $out
+      '';
+    };
+
+    checks.doc = pkgs.stdenv.mkDerivation {
+      name = "lint-docs";
+      # we use cleanPythonSources because the default gitignore
+      # implementation doesn't support the restricted evaluation
+      src = pkgs.poetry2nix.cleanPythonSources {
+        src = ./.;
+      };
+      dontBuild = true;
+      installPhase = ''
+        ${linters.doc}/bin/lint-docs | tee $out
+      '';
+    };
+  });
 }

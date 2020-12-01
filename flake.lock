@@ -1,65 +1,43 @@
 {
   "nodes": {
-    "nixops-aws": {
-      "flake": false,
-      "info": {
-        "lastModified": 1583222160,
-        "narHash": "sha256-PaaRoXZUNs/LO/iZNp18bVCo/cWwxwacdOa8kiugre0="
-      },
-      "locked": {
-        "owner": "kreisys",
-        "repo": "nixops-aws",
-        "rev": "e5a007defd300fa0884f2485e2638cd221dfa13d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "kreisys",
-        "repo": "nixops-aws",
-        "type": "github"
-      }
-    },
-    "nixops-hetzner": {
-      "flake": false,
-      "info": {
-        "lastModified": 1572093160,
-        "narHash": "sha256-2YDEG+84zjmLoyvDiNZAXPhhtt5yMlnwr9QB1Xu/8vo="
-      },
-      "locked": {
-        "owner": "NixOS",
-        "repo": "nixops-hetzner",
-        "rev": "6245ca44f3682e45d6d82cee7d873f76b51ff693",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "repo": "nixops-hetzner",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
-      "info": {
-        "lastModified": 1584717770,
-        "narHash": "sha256-sXoYhuDkTc9UxejNQTYLi6mzb3udQOux6VE9SNOVge4="
-      },
       "locked": {
+        "lastModified": 1593886469,
+        "narHash": "sha256-it7gY5BmUcDr09dUsE6VPnUsSCeBUtU/GfUwqs6twDc=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "feff5202d208f1ab04331c543583acb688719904",
+        "rev": "dc80d7bc4a244120b3d766746c41c0d9c5f81dfa",
         "type": "github"
       },
       "original": {
-        "id": "nixpkgs",
-        "type": "indirect"
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
       }
     },
     "root": {
       "inputs": {
-        "nixops-aws": "nixops-aws",
-        "nixops-hetzner": "nixops-hetzner",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "utils": "utils"
+      }
+    },
+    "utils": {
+      "locked": {
+        "lastModified": 1594123299,
+        "narHash": "sha256-zxjtMmOV93pIVG242RpEXu14w/13XYDo3ygMoRIJg4c=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "590d6d1badea1956a31480a0cba1d8d029cf45d3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
       }
     }
   },
   "root": "root",
-  "version": 5
+  "version": 7
 }

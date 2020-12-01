@@ -1,15 +1,34 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 
 import re
 import nixops.util
 from threading import Event
-from typing import List, Optional, Dict, Any
-from nixops.state import StateDict
+from typing import List, Optional, Dict, Any, Type, TypeVar, Union, TYPE_CHECKING
+from nixops.monkey import Protocol, runtime_checkable
+from nixops.state import StateDict, RecordId
 from nixops.diff import Diff, Handler
+from nixops.util import ImmutableMapping, ImmutableValidatedObject
+from nixops.logger import MachineLogger
+from typing_extensions import Literal
+
+if TYPE_CHECKING:
+    import nixops.deployment
 
 
-class ResourceDefinition(object):
+class ResourceEval(ImmutableMapping[Any, Any]):
+    pass
+
+
+class ResourceOptions(ImmutableValidatedObject):
+    pass
+
+
+class ResourceDefinition:
     """Base class for NixOps resource definitions."""
+
+    resource_eval: ResourceEval
+    config: ResourceOptions
 
     @classmethod
     def get_type(cls) -> str:
@@ -21,11 +40,29 @@ class ResourceDefinition(object):
         """A resource type identifier corresponding to the resources.<type> attribute in the Nix expression"""
         return cls.get_type()
 
-    def __init__(self, xml, config={}):
-        self.config = config
-        self.name = xml.get("name")
-        assert self.name
-        if not re.match("^[a-zA-Z0-9_\-][a-zA-Z0-9_\-\.]*$", self.name):
+    def __init__(self, name: str, config: ResourceEval):
+        config_type = self.__annotations__.get("config", ResourceOptions)
+
+        if isinstance(config_type, str):
+            if config_type == "ResourceOptions":
+                raise TypeError(
+                    f'{self.__class__} is missing a "config" attribute, for example: `config: nixops.resources.ResourceOptions`, see https://nixops.readthedocs.io/en/latest/plugins/authoring.html'
+                )
+            else:
+                raise TypeError(
+                    f"{self.__class__}.config's type annotation is not allowed to be a string, see: https://nixops.readthedocs.io/en/latest/plugins/authoring.html"
+                )
+
+        if not issubclass(config_type, ResourceOptions):
+            raise TypeError(
+                '"config" type annotation must be a ResourceOptions subclass'
+            )
+
+        self.resource_eval = config
+        self.config = config_type(**config)
+        self.name = name
+
+        if not re.match("^[a-zA-Z0-9_\-][a-zA-Z0-9_\-\.]*$", self.name):  # noqa: W605
             raise Exception("invalid resource name ‘{0}’".format(self.name))
 
     def show_type(self) -> str:
@@ -33,52 +70,83 @@ class ResourceDefinition(object):
         return self.get_type()
 
 
-class ResourceState(object):
+ResourceDefinitionType = TypeVar("ResourceDefinitionType", bound="ResourceDefinition")
+
+
+@runtime_checkable
+class ResourceState(Protocol[ResourceDefinitionType]):
     """Base class for NixOps resource state objects."""
+
+    definition_type: Type[ResourceDefinitionType]
 
     name: str
 
     @classmethod
     def get_type(cls) -> str:
-        """A resource type identifier that must match the corresponding ResourceDefinition classs"""
+        """A resource type identifier that must match the corresponding ResourceDefinition class"""
         raise NotImplementedError("get_type")
 
     # Valid values for self.state.  Not all of these make sense for
     # all resource types.
-    UNKNOWN = 0  # state unknown
-    MISSING = 1  # instance destroyed or not yet created
-    STARTING = 2  # boot initiated
-    UP = 3  # machine is reachable
-    STOPPING = 4  # shutdown initiated
-    STOPPED = 5  # machine is down
-    UNREACHABLE = 6  # machine should be up, but is unreachable
-    RESCUE = 7  # rescue system is active for the machine
+    UNKNOWN: Literal[0] = 0  # state unknown
+    MISSING: Literal[1] = 1  # instance destroyed or not yet created
+    STARTING: Literal[2] = 2  # boot initiated
+    UP: Literal[3] = 3  # machine is reachable
+    STOPPING: Literal[4] = 4  # shutdown initiated
+    STOPPED: Literal[5] = 5  # machine is down
+    UNREACHABLE: Literal[6] = 6  # machine should be up, but is unreachable
+    RESCUE: Literal[7] = 7  # rescue system is active for the machine
 
-    state = nixops.util.attr_property("state", UNKNOWN, int)
-    index = nixops.util.attr_property("index", None, int)
-    obsolete = nixops.util.attr_property("obsolete", False, bool)
+    state: Union[
+        Literal[0],
+        Literal[1],
+        Literal[2],
+        Literal[3],
+        Literal[4],
+        Literal[5],
+        Literal[6],
+        Literal[7],
+    ] = nixops.util.attr_property("state", UNKNOWN, int)
+    index: Optional[int] = nixops.util.attr_property("index", None, int)
+    obsolete: bool = nixops.util.attr_property("obsolete", False, bool)
 
     # Time (in Unix epoch) the resource was created.
-    creation_time = nixops.util.attr_property("creationTime", None, int)
+    creation_time: Optional[int] = nixops.util.attr_property("creationTime", None, int)
 
-    _created_event: Event
-    _destroyed_event: Event
-    _errored: Optional[bool]
-    _wait_for: List["ResourceState"]
+    _created_event: Optional[Event] = None
+    _destroyed_event: Optional[Event] = None
+    _errored: Optional[bool] = None
 
-    def __init__(self, depl, name: str, id):
+    # While this looks like a rookie mistake where the list is going  get shared
+    # across all class instances it's not... It's working around a Mypy crash.
+    #
+    # We're overriding this value in __init__.
+    # It's safe despite there being a shared list on the class level
+    _wait_for: List["ResourceState"] = []
+
+    depl: nixops.deployment.Deployment
+    id: RecordId
+    logger: MachineLogger
+
+    def __init__(self, depl: nixops.deployment.Deployment, name: str, id: RecordId):
+        # Override default class-level list.
+        # Previously this behaviour was missing and the _wait_for list was shared across all instances
+        # of ResourceState, resulting in a deadlock in resource destruction as they resource being
+        # destroyed had a reference to itself in the _wait_for list.
+        self._wait_for = []
         self.depl = depl
         self.name = name
         self.id = id
         self.logger = depl.logger.get_logger_for(name)
-        self.logger.register_index(self.index)
+        if self.index is not None:
+            self.logger.register_index(self.index)
 
     def _set_attrs(self, attrs: Dict[str, Any]) -> None:
         """Update machine attributes in the state file."""
         with self.depl._db:
             c = self.depl._db.cursor()
             for n, v in attrs.items():
-                if v == None:
+                if v is None:
                     c.execute(
                         "delete from ResourceAttrs where machine = ? and name = ?",
                         (self.id, n),
@@ -110,7 +178,7 @@ class ResourceState(object):
                 (self.id, name),
             )
             row = c.fetchone()
-            if row != None:
+            if row is not None:
                 return row[0]
             return nixops.util.undefined
 
@@ -135,12 +203,25 @@ class ResourceState(object):
                 self._set_attr(k, v)
 
     # XXX: Deprecated, use self.logger.* instead!
-    log = lambda s, m: s.logger.log(m)
-    log_start = lambda s, m: s.logger.log_start(m)
-    log_continue = lambda s, m: s.logger.log_continue(m)
-    log_end = lambda s, m: s.logger.log_end(m)
-    warn = lambda s, m: s.logger.warn(m)
-    success = lambda s, m: s.logger.success(m)
+    def log(self, *args, **kwargs):
+        return self.logger.log(*args, **kwargs)
+
+    def log_end(self, *args, **kwargs):
+        return self.logger.log_end(*args, **kwargs)
+
+    def log_start(self, *args, **kwargs):
+        return self.logger.log_start(*args, **kwargs)
+
+    def log_continue(self, *args, **kwargs):
+        return self.logger.log_continue(*args, **kwargs)
+
+    def warn(self, *args, **kwargs):
+        return self.logger.warn(*args, **kwargs)
+
+    def success(self, *args, **kwargs):
+        return self.logger.success(*args, **kwargs)
+
+    # XXX: End deprecated methods
 
     def show_type(self) -> str:
         """A short description of the type of resource this is"""
@@ -186,7 +267,7 @@ class ResourceState(object):
         return None
 
     @property
-    def public_ipv4(self):
+    def public_ipv4(self) -> Optional[str]:
         return None
 
     def create_after(self, resources, defn):
@@ -197,7 +278,13 @@ class ResourceState(object):
         """Return a set of resources that should be destroyed after this one."""
         return self.create_after(resources, None)
 
-    def create(self, defn, check, allow_reboot, allow_recreate):
+    def create(
+        self,
+        defn: ResourceDefinitionType,
+        check: bool,
+        allow_reboot: bool,
+        allow_recreate: bool,
+    ):
         """Create or update the resource defined by ‘defn’."""
         raise NotImplementedError("create")
 
@@ -227,13 +314,13 @@ class ResourceState(object):
         if not self.depl.logger.confirm(
             "are you sure you want to clear the state of {}? "
             "this will only remove the resource from the local "
-            "NixOPS state and the resource may still exist outside "
-            "of the NixOPS database.".format(self.name)
+            "NixOps state and the resource may still exist outside "
+            "of the NixOps database.".format(self.name)
         ):
             return False
 
         self.logger.warn(
-            "removing resource {} from the local NixOPS database ...".format(self.name)
+            "removing resource {} from the local NixOps database ...".format(self.name)
         )
         return True
 
@@ -243,27 +330,37 @@ class ResourceState(object):
         return None
 
 
-class DiffEngineResourceState(ResourceState):
+@runtime_checkable
+class DiffEngineResourceState(
+    ResourceState[ResourceDefinitionType], Protocol[ResourceDefinitionType]
+):
     _reserved_keys: List[str] = []
+    _state: StateDict
 
     def __init__(self, depl, name, id):
         nixops.resources.ResourceState.__init__(self, depl, name, id)
         self._state = StateDict(depl, id)
 
-    def create(self, defn, check, allow_reboot, allow_recreate):
+    def create(
+        self,
+        defn: ResourceDefinitionType,
+        check: bool,
+        allow_reboot: bool,
+        allow_recreate: bool,
+    ):
         # if --check is true check against the api and update the state
         # before firing up the diff engine in order to get the needed
         # handlers calls
         if check:
             self._check()
-        diff_engine = self.setup_diff_engine(config=defn.config)
+        diff_engine = self.setup_diff_engine(defn)
 
         for handler in diff_engine.plan():
             handler.handle(allow_recreate)
 
-    def plan(self, defn):
+    def plan(self, defn: ResourceDefinitionType):
         if hasattr(self, "_state"):
-            diff_engine = self.setup_diff_engine(defn.config)
+            diff_engine = self.setup_diff_engine(defn)
             diff_engine.plan(show=True)
         else:
             self.warn(
@@ -272,11 +369,11 @@ class DiffEngineResourceState(ResourceState):
                 )
             )
 
-    def setup_diff_engine(self, config):
+    def setup_diff_engine(self, defn: ResourceDefinitionType):
         diff_engine = Diff(
             depl=self.depl,
             logger=self.logger,
-            config=config,
+            defn=defn,
             state=self._state,
             res_type=self.get_type(),
         )
@@ -289,8 +386,10 @@ class DiffEngineResourceState(ResourceState):
             getattr(self, h) for h in dir(self) if isinstance(getattr(self, h), Handler)
         ]
 
-    def get_defn(self):
-        if self.name in self.depl.definitions:
-            return self.depl.definitions[self.name].config
-        else:
-            return {}
+    def get_defn(self) -> ResourceDefinitionType:
+        return self.depl.get_typed_definition(
+            self.name, self.get_type(), self.definition_type
+        )
+
+
+GenericResourceState = ResourceState[ResourceDefinition]

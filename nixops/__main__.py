@@ -1,9 +1,85 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
+import sys
+
+
+def setup_debugger() -> None:
+    """
+    """
+    import traceback
+    import pdb
+    from types import TracebackType
+    from typing import Type
+
+    def hook(_type: Type[BaseException], value: BaseException, tb: TracebackType):
+        if hasattr(sys, "ps1") or not sys.stderr.isatty():
+            sys.__excepthook__(_type, value, tb)
+        else:
+            traceback.print_exception(_type, value, tb)
+            pdb.post_mortem(tb)
+
+    sys.excepthook = hook
+
+
+# Run check for --pdb as early as possible so it kicks in _before_ plugin loading
+# and other dynamic startup happens
+if __name__.split(".")[-1] == "__main__":
+    if "--pdb" in sys.argv:
+        setup_debugger()
+
 
 from argparse import ArgumentParser, _SubParsersAction, SUPPRESS, REMAINDER
 import os
-from nixops.script_defs import *
+from nixops.parallel import MultipleExceptions
+from nixops.script_defs import (
+    add_subparser,
+    op_list_deployments,
+    op_create,
+    add_common_modify_options,
+    op_modify,
+    op_clone,
+    op_delete,
+    op_info,
+    op_check,
+    op_set_args,
+    op_deploy,
+    add_common_deployment_options,
+    op_send_keys,
+    op_destroy,
+    op_delete_resources,
+    op_stop,
+    op_start,
+    op_reboot,
+    op_show_arguments,
+    op_show_physical,
+    op_ssh,
+    op_ssh_for_each,
+    op_scp,
+    op_mount,
+    op_rename,
+    op_backup,
+    op_backup_status,
+    op_remove_backup,
+    op_clean_backups,
+    op_restore,
+    op_show_option,
+    op_list_generations,
+    op_rollback,
+    op_delete_generation,
+    op_show_console_output,
+    op_dump_nix_paths,
+    op_export,
+    op_import,
+    op_edit,
+    op_copy_closure,
+    op_list_plugins,
+    parser_plugin_hooks,
+    setup_logging,
+    error,
+)
+import sys
+import nixops
+import nixops.ansi
 
 # Set up the parser.
 parser = ArgumentParser(description="NixOS cloud deployment tool", prog="nixops")
@@ -138,6 +214,11 @@ subparser.add_argument(
     help="build and activate the new configuration; do not enable it in the bootloader. Rebooting the system will roll back automatically.",
 )
 subparser.add_argument(
+    "--boot",
+    action="store_true",
+    help="build the new configuration and enable it in the bootloader; do not activate it. Upon reboot, the system will use the new configuration.",
+)
+subparser.add_argument(
     "--repair", action="store_true", help="use --repair when calling nix-build (slow)"
 )
 subparser.add_argument(
@@ -210,7 +291,7 @@ subparser.add_argument("--all", action="store_true", help="destroy all deploymen
 subparser = add_subparser(
     subparsers,
     "delete-resources",
-    help="deletes the resource from the local NixOPS state file.",
+    help="deletes the resource from the local NixOps state file.",
 )
 subparser.set_defaults(op=op_delete_resources)
 subparser.add_argument(
@@ -639,12 +720,11 @@ def main() -> None:
 
     if os.path.basename(sys.argv[0]) == "charon":
         sys.stderr.write(
-            nixops.util.ansi_warn("warning: ‘charon’ is now called ‘nixops’") + "\n"
+            nixops.ansi.ansi_warn("warning: ‘charon’ is now called ‘nixops’") + "\n"
         )
 
     args = parser.parse_args()
     setup_logging(args)
-    setup_debugger(args)
 
     try:
         nixops.deployment.DEBUG = args.debug

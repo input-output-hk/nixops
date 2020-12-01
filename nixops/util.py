@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 
 import os
 import sys
@@ -8,22 +9,40 @@ import copy
 import fcntl
 import base64
 import select
-import socket
-import struct
 import shutil
 import tempfile
 import subprocess
 import logging
 import atexit
 import re
-from typing import Callable, List, Optional, Any, IO, Union, Mapping, TextIO, Tuple
+import typeguard
+import inspect
+import shlex
+from typing import (
+    Callable,
+    List,
+    Optional,
+    Any,
+    IO,
+    Union,
+    Mapping,
+    TextIO,
+    Tuple,
+    Dict,
+    Iterator,
+    TypeVar,
+    Generic,
+    Iterable,
+)
 
-# the following ansi_ imports are for backwards compatability. They
-# would belong fine in this util.py, but having them in util.py
-# causes an import cycle with types.
-from nixops.ansi import ansi_warn, ansi_error, ansi_success, ansi_highlight
+import nixops.util
 from nixops.logger import MachineLogger
 from io import StringIO
+
+
+def shlex_join(split_command: Iterable[str]) -> str:
+    """Backport of shlex.join from python 3.8"""
+    return " ".join(shlex.quote(arg) for arg in split_command)
 
 
 devnull = open(os.devnull, "r+")
@@ -59,11 +78,154 @@ class CommandFailed(Exception):
         return "{0} (exit code {1})".format(self.message, self.exitcode)
 
 
-def logged_exec(
+K = TypeVar("K")
+V = TypeVar("V")
+
+
+class ImmutableMapping(Generic[K, V], Mapping[K, V]):
+    """
+    An immutable wrapper around dict's that also turns lists to tuples
+    """
+
+    def __init__(self, base_dict: Dict):
+        def _transform_value(value: Any) -> Any:
+            if isinstance(value, list):
+                return tuple(_transform_value(i) for i in value)
+            elif isinstance(value, dict):
+                return self.__class__(value)
+            else:
+                return value
+
+        self._dict: Dict[K, V] = {k: _transform_value(v) for k, v in base_dict.items()}
+
+    def __getitem__(self, key: K) -> V:
+        return self._dict[key]
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self._dict)
+
+    def __len__(self) -> int:
+        return len(self._dict)
+
+    def __contains__(self, key: Any) -> bool:
+        return key in self._dict
+
+    def __getattr__(self, key: Any) -> V:
+        return self[key]
+
+    def __repr__(self) -> str:
+        return "<{} {}>".format(self.__class__.__name__, self._dict)
+
+
+class ImmutableValidatedObject:
+    """
+    An immutable object that validates input types
+
+    It also converts nested dictionaries into new ImmutableValidatedObject
+    instances (or the annotated subclass).
+    """
+
+    _frozen: bool
+
+    def __init__(self, *args: ImmutableValidatedObject, **kwargs):
+
+        kw = {}
+        for arg in args:
+            if not isinstance(arg, ImmutableValidatedObject):
+                raise TypeError("Arg not a Immutablevalidatedobject instance")
+            kw.update(dict(arg))
+        kw.update(kwargs)
+
+        # Support inheritance
+        anno: Dict = {}
+        for x in reversed(self.__class__.mro()):
+            if not hasattr(x, "__annotations__"):
+                continue
+            anno.update(x.__annotations__)
+
+        def _transform_value(key: Any, value: Any) -> Any:
+            ann = anno.get(key)
+
+            # Untyped, pass through
+            if not ann:
+                return value
+
+            if inspect.isclass(ann) and issubclass(ann, ImmutableValidatedObject):
+                value = ann(**value)
+
+            # Support Sequence[ImmutableValidatedObject]
+            if isinstance(value, tuple) and not isinstance(ann, str):
+                new_value = []
+                for v in value:
+                    for subann in ann.__args__:
+                        if inspect.isclass(subann) and issubclass(
+                            subann, ImmutableValidatedObject
+                        ):
+                            new_value.append(subann(**v))
+                        else:
+                            new_value.append(v)
+                value = tuple(new_value)
+
+            typeguard.check_type(key, value, ann)
+
+            return value
+
+        for key in set(list(anno.keys()) + list(kwargs.keys())):
+            # If a default value:
+            # class SomeSubClass(ImmutableValidatedObject):
+            #   x: int = 1
+            #
+            # is set this attribute is set on self before __init__ is called
+            default = getattr(self, key) if hasattr(self, key) else None
+            value = kw.get(key, default)
+            setattr(self, key, _transform_value(key, value))
+
+        self._frozen = True
+
+    def __setattr__(self, name, value) -> None:
+        if hasattr(self, "_frozen") and self._frozen:
+            raise AttributeError(f"{self.__class__.__name__} is immutable")
+        super().__setattr__(name, value)
+
+    def __iter__(self):
+        for attr, value in self.__dict__.items():
+            if attr == "_frozen":
+                continue
+            yield attr, value
+
+    def __repr__(self) -> str:
+        anno: Dict = self.__annotations__
+
+        attrs: List[str] = []
+        for attr, value in self.__dict__.items():
+            if attr == "_frozen":
+                continue
+
+            ann: str = ""
+            a = anno.get(attr)
+            if a and hasattr(a, "__name__"):
+                ann = f": {a.__name__}"
+            elif a is not None:
+                ann = f": {a}"
+
+            attrs.append(f"{attr}{ann} = {value}")
+
+        return "{}({})".format(self.__class__.__name__, ", ".join(attrs))
+
+
+class NixopsEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (ImmutableMapping, ImmutableValidatedObject)):
+            return dict(obj)
+        return json.JSONEncoder.default(self, obj)
+
+
+def logged_exec(  # noqa: C901
     command: List[str],
     logger: MachineLogger,
     check: bool = True,
     capture_stdout: bool = False,
+    capture_stderr: Optional[bool] = True,
     stdin: Optional[IO[Any]] = None,
     stdin_string: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
@@ -99,7 +261,7 @@ def logged_exec(
             env=env,
             stdin=passed_stdin,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.PIPE if capture_stderr else nixops.util.devnull,
             preexec_fn=preexec_fn,
             text=True,
         )
@@ -111,7 +273,7 @@ def logged_exec(
             env=env,
             stdin=passed_stdin,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.STDOUT if capture_stderr else nixops.util.devnull,
             preexec_fn=preexec_fn,
             text=True,
         )
@@ -169,10 +331,10 @@ def logged_exec(
         (r, w, x) = select.select(fds, [], [], 1)
         if len(r) == 0 and process.poll() is not None:
             break
-        if capture_stdout and process.stdout in r:
-            data = process.stdout.read()
+        if capture_stdout and process_stdout in r:
+            data = process_stdout.read()
             if data == "":
-                fds.remove(process.stdout)
+                fds.remove(process_stdout)
             else:
                 stdout += data
         if log_fd in r:
@@ -220,57 +382,54 @@ def make_non_blocking(fd: IO[Any]) -> None:
     fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
 
 
-def ping_tcp_port(
-    host: str, port: int, timeout: int = 1, ensure_timeout: bool = False
+def wait_for_success(
+    fn: Callable,
+    timeout: Optional[int] = None,
+    callback: Optional[Callable[[], Any]] = None,
 ) -> bool:
-    """"
-    Return to True or False depending on being able to connect the specified host and port.
-    Raises exceptions which are not related to opening a socket to the target host.
-    """
-    infos = socket.getaddrinfo(host, port, 0, 0, socket.IPPROTO_TCP)
-    for info in infos:
-        s = socket.socket(info[0], info[1])
-        s.settimeout(timeout)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    n = 0
+    while True:
         try:
-            s.connect(info[4])
-        except socket.timeout:
-            # try next address
-            continue
-        except EnvironmentError:
-            # Reset, Refused, Aborted, No route to host
-            if ensure_timeout:
-                time.sleep(timeout)
-            # continue with the next address
-            continue
-        except:
-            raise
+            fn()
+        except Exception:
+            pass
         else:
-            s.shutdown(socket.SHUT_RDWR)
             return True
+
+        n = n + 1
+        if timeout is not None and n >= timeout:
+            break
+
+        if callback:
+            callback()
+
+        time.sleep(1)
+
     return False
 
 
-def wait_for_tcp_port(
-    ip: str,
-    port: int,
-    timeout: int = -1,
-    open: bool = True,
+def wait_for_fail(
+    fn: Callable,
+    timeout: Optional[int] = None,
     callback: Optional[Callable[[], Any]] = None,
 ) -> bool:
-    """Wait until the specified TCP port is open or closed."""
     n = 0
     while True:
-        if ping_tcp_port(ip, port, ensure_timeout=True) == open:
+        try:
+            fn()
+        except Exception:
             return True
-        if not open:
-            time.sleep(1)
+
         n = n + 1
-        if timeout != -1 and n >= timeout:
+        if timeout is not None and n >= timeout:
             break
+
         if callback:
             callback()
-    raise Exception("timed out waiting for port {0} on ‘{1}’".format(port, ip))
+
+        time.sleep(1)
+
+    return False
 
 
 def _maybe_abspath(s: str) -> str:
@@ -309,7 +468,7 @@ def attr_property(name: str, default: Any, type: Optional[Any] = str) -> Any:
             raise Exception(
                 "deployment attribute ‘{0}’ missing from state file".format(name)
             )
-        if s == None:
+        if s is None:
             return None
         elif type is str:
             return s
@@ -317,7 +476,7 @@ def attr_property(name: str, default: Any, type: Optional[Any] = str) -> Any:
             return int(s)
         elif type is bool:
             return True if s == "1" else False
-        elif type is "json":
+        elif type == "json":
             return json.loads(s)
         else:
             assert False
@@ -325,8 +484,8 @@ def attr_property(name: str, default: Any, type: Optional[Any] = str) -> Any:
     def set(self, x: Any) -> None:
         if x == default:
             self._del_attr(name)
-        elif type is "json":
-            self._set_attr(name, json.dumps(x))
+        elif type == "json":
+            self._set_attr(name, json.dumps(x, cls=NixopsEncoder))
         else:
             self._set_attr(name, x)
 
@@ -374,8 +533,8 @@ class TeeStderr(StringIO):
 
     def write(self, data) -> int:
         ret = self.stderr.write(data)
-        for l in data.split("\n"):
-            self.logger.warning(l)
+        for line in data.split("\n"):
+            self.logger.warning(line)
         return ret
 
     def fileno(self) -> int:
@@ -402,8 +561,8 @@ class TeeStdout(StringIO):
 
     def write(self, data) -> int:
         ret = self.stdout.write(data)
-        for l in data.split("\n"):
-            self.logger.info(l)
+        for line in data.split("\n"):
+            self.logger.info(line)
         return ret
 
     def fileno(self) -> int:
@@ -434,7 +593,7 @@ def which(program: str) -> str:
             if is_exe(exe_file):
                 return exe_file
 
-    raise Exception("program ‘{0}’ not found in \$PATH".format(program))
+    raise Exception("program ‘{0}’ not found in \$PATH".format(program))  # noqa: W605
 
 
 def enum(**enums):
@@ -444,45 +603,6 @@ def enum(**enums):
 def write_file(path: str, contents: str) -> None:
     with open(path, "w") as f:
         f.write(contents)
-
-
-def xml_expr_to_python(node):
-    res: Any
-    if node.tag == "attrs":
-        res = {}
-        for attr in node.findall("attr"):
-            if attr.get("name") != "_module":
-                res[attr.get("name")] = xml_expr_to_python(attr.find("*"))
-        return res
-
-    elif node.tag == "list":
-        res = []
-        for elem in node.findall("*"):
-            res.append(xml_expr_to_python(elem))
-        return res
-
-    elif node.tag == "string":
-        return node.get("value")
-
-    elif node.tag == "path":
-        return node.get("value")
-
-    elif node.tag == "bool":
-        return node.get("value") == "true"
-
-    elif node.tag == "int":
-        return int(node.get("value"))
-
-    elif node.tag == "null":
-        return None
-
-    elif node.tag == "derivation":
-        return {"drvPath": node.get("drvPath/"), "outPath": node.get("outPath")}
-
-    raise Exception(
-        "cannot convert XML output of nix-instantiate to Python: Unknown tag "
-        + node.tag
-    )
 
 
 def parse_nixos_version(s: str) -> List[str]:
@@ -495,7 +615,7 @@ def parse_nixos_version(s: str) -> List[str]:
 # nvme -> sd
 def device_name_to_boto_expected(string: str) -> str:
     """Transfoms device name to name, that boto expects."""
-    m = re.search("(.*)\/nvme(\d+)n1p?(\d+)?", string)
+    m = re.search("(.*)\/nvme(\d+)n1p?(\d+)?", string)  # noqa: W605
     if m is not None:
         device = m.group(2)
         device_ = int(device) - 1
