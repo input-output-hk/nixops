@@ -58,6 +58,7 @@
         overrides
       ];
 
+      passthru.evalMachineInfo = import ./nix/eval-machine-info.nix;
       # TODO: Re-add manual build
     };
 
