@@ -1,78 +1,99 @@
 # -*- coding: utf-8 -*-
-
+from __future__ import annotations
 import os
 import re
-import subprocess
-from typing import Dict, Any, List, Optional, Union, Set
+from typing import Mapping, Any, List, Optional, Union, Sequence, TypeVar, Callable
+from nixops.monkey import Protocol, runtime_checkable
 import nixops.util
 import nixops.resources
 import nixops.ssh_util
-import xml.etree.ElementTree as ET
+from nixops.state import RecordId
+import subprocess
+import threading
+
+
+class KeyOptions(nixops.resources.ResourceOptions):
+    text: Optional[str]
+    keyFile: Optional[str]
+    keyCommand: Optional[Sequence[str]]
+    name: str
+    path: str
+    destDir: str
+    user: str
+    group: str
+    permissions: str
+
+
+class MachineOptions(nixops.resources.ResourceOptions):
+    targetPort: int
+    alwaysActivate: bool
+    owners: Sequence[str]
+    hasFastConnection: bool
+    keys: Mapping[str, KeyOptions]
+    nixosRelease: str
+    targetUser: Optional[str]
+    sshOptions: Sequence[str]
+    privilegeEscalationCommand: Sequence[str]
 
 
 class MachineDefinition(nixops.resources.ResourceDefinition):
     """Base class for NixOps machine definitions."""
 
-    def __init__(self, xml, config={}) -> None:
-        nixops.resources.ResourceDefinition.__init__(self, xml, config)
-        self.encrypted_links_to: Set[str] = {
-            e.get("value")
-            for e in xml.findall("attrs/attr[@name='encryptedLinksTo']/list/string")
-        }
-        self.store_keys_on_machine = (
-            xml.find("attrs/attr[@name='storeKeysOnMachine']/bool").get("value")
-            == "true"
-        )
-        self.ssh_port = int(xml.find("attrs/attr[@name='targetPort']/int").get("value"))
-        self.always_activate = (
-            xml.find("attrs/attr[@name='alwaysActivate']/bool").get("value") == "true"
-        )
-        self.owners = [
-            e.get("value")
-            for e in xml.findall("attrs/attr[@name='owners']/list/string")
-        ]
-        self.has_fast_connection = (
-            xml.find("attrs/attr[@name='hasFastConnection']/bool").get("value")
-            == "true"
-        )
+    config: MachineOptions
 
-        def _extract_key_options(x: ET.Element) -> Dict[str, str]:
-            opts = {}
-            for (key, xmlType) in (
-                ("text", "string"),
-                ("keyFile", "path"),
-                ("destDir", "string"),
-                ("user", "string"),
-                ("group", "string"),
-                ("permissions", "string"),
-            ):
-                elem = x.find("attrs/attr[@name='{0}']/{1}".format(key, xmlType))
-                if elem is not None:
-                    value = elem.get("value")
-                    if value is not None:
-                        opts[key] = value
-            return opts
+    ssh_port: int
+    always_activate: bool
+    owners: List[str]
+    has_fast_connection: bool
+    keys: Mapping[str, KeyOptions]
+    ssh_user: str
+    ssh_options: List[str]
+    privilege_escalation_command: List[str]
+    provision_ssh_key: bool
 
-        self.keys = {
-            k.get("name"): _extract_key_options(k)
-            for k in xml.findall("attrs/attr[@name='keys']/attrs/attr")
-        }
+    def __init__(self, name: str, config: nixops.resources.ResourceEval):
+        super().__init__(name, config)
+        self.ssh_port = config["targetPort"]
+        self.always_activate = config["alwaysActivate"]
+        self.owners = config["owners"]
+        self.has_fast_connection = config["hasFastConnection"]
+        self.keys = {k: KeyOptions(**v) for k, v in config["keys"].items()}
+        self.ssh_options = config["sshOptions"]
+
+        self.ssh_user = config["targetUser"]
+
+        self.privilege_escalation_command = config["privilegeEscalationCommand"]
+        self.provision_ssh_key = config["provisionSSHKey"]
 
 
-class MachineState(nixops.resources.ResourceState):
+MachineDefinitionType = TypeVar("MachineDefinitionType", bound="MachineDefinition")
+
+
+@runtime_checkable
+class MachineState(
+    nixops.resources.ResourceState[MachineDefinitionType],
+    Protocol[MachineDefinitionType],
+):
     """Base class for NixOps machine state objects."""
 
     vm_id: Optional[str] = nixops.util.attr_property("vmId", None)
     has_fast_connection: bool = nixops.util.attr_property(
         "hasFastConnection", False, bool
     )
+
+    ssh: nixops.ssh_util.SSH
     ssh_pinged: bool = nixops.util.attr_property("sshPinged", False, bool)
-    ssh_port: int = nixops.util.attr_property("targetPort", 22, int)
-    public_vpn_key: Optional[str] = nixops.util.attr_property("publicVpnKey", None)
-    store_keys_on_machine: bool = nixops.util.attr_property(
-        "storeKeysOnMachine", False, bool
+    _ssh_pinged_this_time: bool = False
+    ssh_port: int = nixops.util.attr_property("targetPort", None, int)
+    ssh_user: str = nixops.util.attr_property("targetUser", "root", str)
+    ssh_options: List[str] = nixops.util.attr_property("sshOptions", [], "json")
+    privilege_escalation_command: List[str] = nixops.util.attr_property(
+        "privilegeEscalationCommand", [], "json"
     )
-    keys: Dict[str, str] = nixops.util.attr_property("keys", {}, "json")
+    _ssh_private_key_file: Optional[str]
+    provision_ssh_key: bool = nixops.util.attr_property("provisionSSHKey", True, bool)
+    public_vpn_key: Optional[str] = nixops.util.attr_property("publicVpnKey", None)
+    keys: Mapping[str, KeyOptions] = nixops.util.attr_property("keys", {}, "json")
     owners: List[str] = nixops.util.attr_property("owners", [], "json")
 
     # Nix store path of the last global configuration deployed to this
@@ -83,9 +104,10 @@ class MachineState(nixops.resources.ResourceState):
     # Nix store path of the last machine configuration deployed to
     # this machine.
     cur_toplevel: Optional[str] = nixops.util.attr_property("toplevel", None)
+    new_toplevel: Optional[str]
 
     # Immutable flake URI from which this machine was built.
-    cur_flake_uri = nixops.util.attr_property("curFlakeUri", None)
+    cur_flake_uri: Optional[str] = nixops.util.attr_property("curFlakeUri", None)
 
     # Time (in Unix epoch) the instance was started, if known.
     start_time: Optional[int] = nixops.util.attr_property("startTime", None, int)
@@ -94,8 +116,11 @@ class MachineState(nixops.resources.ResourceState):
     # machine was created.
     state_version: Optional[str] = nixops.util.attr_property("stateVersion", None, str)
 
-    def __init__(self, depl, name: str, id: int) -> None:
-        nixops.resources.ResourceState.__init__(self, depl, name, id)
+    defn: Optional[MachineDefinition] = None
+
+    def __init__(self, depl, name: str, id: RecordId) -> None:
+        super().__init__(depl, name, id)
+        self.defn = None
         self._ssh_pinged_this_time = False
         self.ssh = nixops.ssh_util.SSH(self.logger)
         self.ssh.register_flag_fun(self.get_ssh_flags)
@@ -103,22 +128,29 @@ class MachineState(nixops.resources.ResourceState):
         self.ssh.register_passwd_fun(self.get_ssh_password)
         self._ssh_private_key_file: Optional[str] = None
         self.new_toplevel: Optional[str] = None
+        self.ssh.privilege_escalation_command = self.privilege_escalation_command
 
     def prefix_definition(self, attr):
-        return {('nodes'): attr}
+        return attr
 
     @property
     def started(self) -> bool:
         state = self.state
         return state == self.STARTING or state == self.UP
 
-    def set_common_state(self, defn) -> None:
-        self.store_keys_on_machine = defn.store_keys_on_machine
+    def set_common_state(self, defn: MachineDefinitionType) -> None:
+        self.defn = defn
         self.keys = defn.keys
         self.ssh_port = defn.ssh_port
+        self.ssh_user = defn.ssh_user
+        self.ssh_options = defn.ssh_options
         self.has_fast_connection = defn.has_fast_connection
+        self.provision_ssh_key = defn.provision_ssh_key
         if not self.has_fast_connection:
             self.ssh.enable_compression()
+
+        self.ssh.privilege_escalation_command = list(defn.privilege_escalation_command)
+        self.privilege_escalation_command = list(defn.privilege_escalation_command)
 
     def stop(self) -> None:
         """Stop this machine, if possible."""
@@ -153,7 +185,7 @@ class MachineState(nixops.resources.ResourceState):
 
     def _check(self, res):  # TODO -> None but supertype ResourceState -> True
         avg = self.get_load_avg()
-        if avg == None:
+        if avg is None:
             if self.state == self.UP:
                 self.state = self.UNREACHABLE
             res.is_reachable = False
@@ -165,18 +197,24 @@ class MachineState(nixops.resources.ResourceState):
             res.load = avg
 
             # Get the systemd units that are in a failed state or in progress.
+            # cat to inhibit color output.
             out = self.run_command(
-                "systemctl --all --full --no-legend", capture_stdout=True
+                "systemctl --all --full --no-legend | cat", capture_stdout=True
             ).split("\n")
             res.failed_units = []
             res.in_progress_units = []
-            for l in out:
-                match = re.match("^([^ ]+) .* failed .*$", l)
+            for raw_line in out:
+                # All this string processing is fragile.
+                # NixOS 20.09 and later support systemctl --output json
+                # Alternatively, we *could* talk to DBus which has always been
+                # the first-class API.
+                line = raw_line.strip(" ●")
+                match = re.match("^([^ ]+) .* failed .*$", line)
                 if match:
                     res.failed_units.append(match.group(1))
 
                 # services that are in progress
-                match = re.match("^([^ ]+) .* activating .*$", l)
+                match = re.match("^([^ ]+) .* activating .*$", line)
                 if match:
                     res.in_progress_units.append(match.group(1))
 
@@ -185,7 +223,7 @@ class MachineState(nixops.resources.ResourceState):
                 # that.  Hack: ignore special filesystems like
                 # /sys/kernel/config and /tmp. Systemd tries to mount these
                 # even when they don't exist.
-                match = re.match("^([^\.]+\.mount) .* inactive .*$", l)
+                match = re.match("^([^\.]+\.mount) .* inactive .*$", line)  # noqa: W605
                 if (
                     match
                     and not match.group(1).startswith("sys-")
@@ -199,7 +237,7 @@ class MachineState(nixops.resources.ResourceState):
                         self.run_command(
                             "cat /etc/fstab | cut -d' ' -f 2 | grep '^/tmp$' &> /dev/null"
                         )
-                    except:
+                    except Exception:
                         continue
                     res.failed_units.append(match.group(1))
 
@@ -217,7 +255,7 @@ class MachineState(nixops.resources.ResourceState):
             "don't know how to remove a backup for machine ‘{0}’".format(self.name)
         )
 
-    def get_backups(self) -> Dict[str, Dict[str, Any]]:
+    def get_backups(self) -> Mapping[str, Mapping[str, Any]]:
         self.warn("don't know how to list backups for ‘{0}’".format(self.name))
         return {}
 
@@ -241,20 +279,64 @@ class MachineState(nixops.resources.ResourceState):
         self.state = self.STARTING
         self.ssh.reset()
 
+    def ping(self) -> bool:
+        event = threading.Event()
+
+        def _worker():
+            try:
+                self.ssh.run_command(
+                    ["true"],
+                    user=self.ssh_user,
+                    timeout=1,
+                    logged=False,
+                    connection_tries=1,
+                    ssh_quiet=True,
+                )
+            except Exception:
+                return False
+            else:
+                event.set()
+
+        t = threading.Thread(target=_worker)
+        t.start()
+
+        return event.wait(timeout=1)
+
+    def _ping(self) -> None:
+        """Wrap ping() so we can check for success via exceptions"""
+        if not self.ping():
+            raise ValueError("Did not return True")
+
+    def wait_for_up(
+        self,
+        timeout: Optional[int] = None,
+        callback: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        nixops.util.wait_for_success(self._ping, timeout=timeout, callback=callback)
+        self.ssh.reset()  # To avoid passing a stderr suppressed master conn forward
+
+    def wait_for_down(
+        self,
+        timeout: Optional[int] = None,
+        callback: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        nixops.util.wait_for_fail(self._ping, timeout=timeout, callback=callback)
+        self.ssh.reset()  # To avoid passing a stderr suppressed master conn forward
+
     def reboot_sync(self, hard: bool = False) -> None:
         """Reboot this machine and wait until it's up again."""
         self.reboot(hard=hard)
         self.log_start("waiting for the machine to finish rebooting...")
-        nixops.util.wait_for_tcp_port(
-            self.get_ssh_name(),
-            self.ssh_port,
-            open=False,
-            callback=lambda: self.log_continue("."),
-        )
+
+        def progress_cb() -> None:
+            self.log_continue(".")
+
+        self.wait_for_down(callback=progress_cb)
+
         self.log_continue("[down]")
-        nixops.util.wait_for_tcp_port(
-            self.get_ssh_name(), self.ssh_port, callback=lambda: self.log_continue(".")
-        )
+
+        self.wait_for_up(callback=progress_cb)
+
         self.log_end("[up]")
         self.state = self.UP
         self.ssh_pinged = True
@@ -274,13 +356,10 @@ class MachineState(nixops.resources.ResourceState):
             # so keys will probably end up being written to DISK instead of
             # into memory.
             return
-        if self.store_keys_on_machine:
-            return
+
         for k, opts in self.get_keys().items():
-            self.log("uploading key ‘{0}’...".format(k))
+            self.log("uploading key ‘{0}’ to ‘{1}’...".format(k, opts["path"]))
             tmp = self.depl.tempdir + "/key-" + self.name
-            if "destDir" not in opts:
-                raise Exception("Key '{}' has no 'destDir' specified.".format(k))
 
             destDir = opts["destDir"].rstrip("/")
             self.run_command(
@@ -291,22 +370,29 @@ class MachineState(nixops.resources.ResourceState):
                 ).format(destDir)
             )
 
-            if "text" in opts:
+            if opts.get("text") is not None:
                 with open(tmp, "w+") as f:
                     f.write(opts["text"])
-            elif "keyFile" in opts:
+            elif opts.get("keyFile") is not None:
                 self._logged_exec(["cp", opts["keyFile"], tmp])
+            elif opts.get("keyCommand") is not None:
+                try:
+                    with open(tmp, "w+") as f:
+                        subprocess.run(opts["keyCommand"], stdout=f, check=True)
+                except subprocess.CalledProcessError:
+                    self.warn(f"Running command to generate key '{k}' failed:")
+                    raise
             else:
                 raise Exception(
-                    "Neither 'text' or 'keyFile' options were set for key '{0}'.".format(
+                    "Neither 'text', 'keyFile', nor 'keyCommand' options were set for key '{0}'.".format(
                         k
                     )
                 )
 
-            outfile = destDir + "/" + k
+            outfile = opts["path"]
             # We scp to a temporary file and then mv because scp is not atomic.
             # See https://github.com/NixOS/nixops/issues/762
-            tmp_outfile = destDir + "/." + k + ".tmp"
+            tmp_outfile = destDir + "/." + opts["name"] + ".tmp"
             outfile_esc = "'" + outfile.replace("'", r"'\''") + "'"
             tmp_outfile_esc = "'" + tmp_outfile.replace("'", r"'\''") + "'"
             self.run_command("rm -f " + outfile_esc + " " + tmp_outfile_esc)
@@ -344,11 +430,13 @@ class MachineState(nixops.resources.ResourceState):
     def get_ssh_name(self):
         assert False
 
-    def get_ssh_flags(self, scp=False):
+    def get_ssh_flags(self, scp=False) -> List[str]:
         if scp:
-            return ["-P", str(self.ssh_port)]
+            return ["-P", str(self.ssh_port)] if self.ssh_port is not None else []
         else:
-            return ["-p", str(self.ssh_port)]
+            return list(self.ssh_options) + (
+                ["-p", str(self.ssh_port)] if self.ssh_port is not None else []
+            )
 
     def get_ssh_password(self):
         return None
@@ -361,7 +449,7 @@ class MachineState(nixops.resources.ResourceState):
         return None
 
     @property
-    def private_ipv4(self):
+    def private_ipv4(self) -> Optional[str]:
         return None
 
     def address_to(self, r):
@@ -373,23 +461,23 @@ class MachineState(nixops.resources.ResourceState):
         if self.ssh_pinged and (not check or self._ssh_pinged_this_time):
             return
         self.log_start("waiting for SSH...")
-        nixops.util.wait_for_tcp_port(
-            self.get_ssh_name(), self.ssh_port, callback=lambda: self.log_continue(".")
-        )
+
+        self.wait_for_up(callback=lambda: self.log_continue("."))
+
         self.log_end("")
         if self.state != self.RESCUE:
             self.state = self.UP
         self.ssh_pinged = True
         self._ssh_pinged_this_time = True
 
-    def write_ssh_private_key(self, private_key):
+    def write_ssh_private_key(self, private_key) -> str:
         key_file = "{0}/id_nixops-{1}".format(self.depl.tempdir, self.name)
         with os.fdopen(os.open(key_file, os.O_CREAT | os.O_WRONLY, 0o600), "w") as f:
             f.write(private_key)
         self._ssh_private_key_file = key_file
         return key_file
 
-    def get_ssh_private_key_file(self):
+    def get_ssh_private_key_file(self) -> Optional[str]:
         return None
 
     def _logged_exec(self, command, **kwargs):
@@ -406,7 +494,9 @@ class MachineState(nixops.resources.ResourceState):
         # mainly operating in a chroot environment.
         if self.state == self.RESCUE:
             command = "export LANG= LC_ALL= LC_TIME=; " + command
-        return self.ssh.run_command(command, self.get_ssh_flags(), **kwargs)
+        return self.ssh.run_command(
+            command, flags=self.get_ssh_flags(), user=self.ssh_user, **kwargs
+        )
 
     def switch_to_configuration(
         self, method: str, sync: bool, command: Optional[str] = None
@@ -434,59 +524,59 @@ class MachineState(nixops.resources.ResourceState):
 
         # Any remaining paths are copied from the local machine.
         env = dict(os.environ)
-        env["NIX_SSHOPTS"] = " ".join(ssh._get_flags() + ssh.get_master().opts)
+        env["NIX_SSHOPTS"] = " ".join(
+            ssh._get_flags() + ssh.get_master(user=self.ssh_user).opts
+        )
         self._logged_exec(
-            ["nix-copy-closure", "--to", ssh._get_target(), path]
+            ["nix-copy-closure", "--to", ssh._get_target(user=self.ssh_user), path]
             + ([] if self.has_fast_connection else ["--use-substitutes"]),
             env=env,
         )
 
-    def generate_vpn_key(self):
-        key_missing = False
-        try:
-            self.run_command("test -f /root/.ssh/id_charon_vpn")
-        except nixops.ssh_util.SSHCommandFailed:
-            key_missing = True
-
-        if self.public_vpn_key and not key_missing:
-            return
-
-        (private, public) = nixops.util.create_key_pair(
-            key_name="NixOps VPN key of {0}".format(self.name)
-        )
-        f = open(self.depl.tempdir + "/id_vpn-" + self.name, "w+")
-        f.write(private)
-        f.seek(0)
-        res = self.run_command(
-            "umask 077 && mkdir -p /root/.ssh &&" " cat > /root/.ssh/id_charon_vpn",
-            check=False,
-            stdin=f,
-        )
-        if res != 0:
-            raise Exception("unable to upload VPN key to ‘{0}’".format(self.name))
-        self.public_vpn_key = public
-
-    def get_scp_name(self):
+    def _get_scp_name(self) -> str:
         ssh_name = self.get_ssh_name()
         # ipv6 addresses have to be wrapped in brackets for scp
         if ":" in ssh_name:
             return "[%s]" % (ssh_name)
         return ssh_name
 
-    def upload_file(self, source, target, recursive=False):
-        master = self.ssh.get_master()
-        cmdline = ["scp"] + self.get_ssh_flags(True) + master.opts
+    def _fmt_rsync_command(self, *args: str, recursive: bool = False) -> List[str]:
+        master = self.ssh.get_master(user=self.ssh_user)
+
+        ssh_cmdline: List[str] = ["ssh"] + self.get_ssh_flags() + master.opts
+        cmdline = ["rsync", "-e", nixops.util.shlex_join(ssh_cmdline)]
+
+        if self.ssh_user != "root":
+            cmdline.extend(
+                [
+                    "--rsync-path",
+                    nixops.util.shlex_join(
+                        self.ssh.privilege_escalation_command + ["rsync"]
+                    ),
+                ]
+            )
+
         if recursive:
             cmdline += ["-r"]
-        cmdline += [source, "root@" + self.get_scp_name() + ":" + target]
+
+        cmdline.extend(args)
+
+        return cmdline
+
+    def upload_file(self, source: str, target: str, recursive: bool = False):
+        cmdline = self._fmt_rsync_command(
+            source,
+            self.ssh_user + "@" + self._get_scp_name() + ":" + target,
+            recursive=recursive,
+        )
         return self._logged_exec(cmdline)
 
-    def download_file(self, source, target, recursive=False):
-        master = self.ssh.get_master()
-        cmdline = ["scp"] + self.get_ssh_flags(True) + master.opts
-        if recursive:
-            cmdline += ["-r"]
-        cmdline += ["root@" + self.get_scp_name() + ":" + source, target]
+    def download_file(self, source: str, target: str, recursive: bool = False):
+        cmdline = self._fmt_rsync_command(
+            self.ssh_user + "@" + self._get_scp_name() + ":" + source,
+            target,
+            recursive=recursive,
+        )
         return self._logged_exec(cmdline)
 
     def get_console_output(self):
@@ -523,3 +613,6 @@ class CheckResult(object):
 
         # FIXME: add a check whether the active NixOS config on the
         # machine is correct.
+
+
+GenericMachineState = MachineState[MachineDefinition]
