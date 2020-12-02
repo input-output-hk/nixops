@@ -7,6 +7,8 @@
 }:
 
 let
+  evalMachineInfo = import ./nix/eval-machine-info.nix;
+
   # Wrap the buildEnv derivation in an outer derivation that omits interpreters & other binaries
   mkPluginDrv = {
     finalDrv
@@ -43,7 +45,7 @@ let
   in runCommandNoCC "${finalDrv.pname}-with-plugins-${finalDrv.version}" {
     inherit (finalDrv) meta;
     passthru = {
-      eval-machine-info = import ./nix/eval-machine-info.nix;
+      inherit evalMachineInfo;
       propagatedBuildInputs = givenPlugins;
     } // finalDrv.passthru;
   } ''
@@ -109,7 +111,7 @@ let
       })
     ];
 
-    passthru.eval-machine-info = import ./nix/eval-machine-info.nix;
+    passthru = { inherit evalMachineInfo; };
 
     # TODO: Manual build should be included via pyproject.toml
     postInstall = ''
