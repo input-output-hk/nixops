@@ -43,6 +43,7 @@ from nixops.script_defs import (
     op_check,
     op_set_args,
     op_deploy,
+    op_eval,
     add_common_deployment_options,
     op_send_keys,
     op_destroy,
