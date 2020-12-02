@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from nixops.nix_expr import py2nix
-from nixops.parallel import MultipleExceptions, run_tasks
-import pluggy
+from nixops.parallel import run_tasks
 
 import contextlib
 import nixops.statefile
@@ -19,27 +18,17 @@ import nixops.known_hosts
 import time
 import logging
 import logging.handlers
-import syslog
 import json
 import pipes
-from typing import Tuple, List, Optional, Union, Any, Generator
-from datetime import datetime
-from pprint import pprint
-import importlib
-import traceback
-import pdb
-from argparse import Namespace
-from types import TracebackType
-from typing import Type
+from typing import Tuple, List, Optional, Union, Generator
+import nixops.ansi
+
+from nixops.plugins.manager import PluginManager
 
 from nixops.plugins import get_plugin_manager
 
 
-pm = get_plugin_manager()
-[
-    [importlib.import_module(mod) for mod in pluginimports]
-    for pluginimports in pm.hook.load()
-]
+PluginManager.load()
 
 
 @contextlib.contextmanager
@@ -59,6 +48,8 @@ def network_state(args: Namespace) -> Generator[nixops.statefile.StateFile, None
 
 
 def op_list_plugins(args):
+    pm = get_plugin_manager()
+
     if args.verbose:
         tbl = create_table([("Installed Plugins", "c"), ("Plugin Reference", "c")])
     else:
@@ -100,32 +91,26 @@ def one_or_all(
 
 def op_list_deployments(args):
     with network_state(args) as sf:
-        sorted_deployments = sort_deployments(sf.get_all_deployments())
-
-        if args.plain:
-            for depl in sorted_deployments:
-                print("\t".join([depl.uuid, depl.name]))
-        else:
-            tbl = create_table(
+        tbl = create_table(
+            [
+                ("UUID", "l"),
+                ("Name", "l"),
+                ("Description", "l"),
+                ("# Machines", "r"),
+                ("Type", "c"),
+            ]
+        )
+        for depl in sort_deployments(sf.get_all_deployments()):
+            tbl.add_row(
                 [
-                    ("UUID", "l"),
-                    ("Name", "l"),
-                    ("Description", "l"),
-                    ("# Machines", "r"),
-                    ("Type", "c"),
+                    depl.uuid,
+                    depl.name or "(none)",
+                    depl.description,
+                    len(depl.machines),
+                    ", ".join(set(m.get_type() for m in depl.machines.values())),
                 ]
             )
-            for depl in sort_deployments(sf.get_all_deployments()):
-                tbl.add_row(
-                    [
-                        depl.uuid,
-                        depl.name or "(none)",
-                        depl.description,
-                        len(depl.machines),
-                        ", ".join(set(m.get_type() for m in depl.machines.values())),
-                    ]
-                )
-            print(tbl)
+        print(tbl)
 
 
 def open_deployment(sf: nixops.statefile.StateFile, args: Namespace):
@@ -134,9 +119,9 @@ def open_deployment(sf: nixops.statefile.StateFile, args: Namespace):
     depl.extra_nix_path = sum(args.nix_path or [], [])
     for (n, v) in args.nix_options or []:
         depl.extra_nix_flags.extend(["--option", n, v])
-    if args.max_jobs != None:
+    if args.max_jobs is not None:
         depl.extra_nix_flags.extend(["--max-jobs", str(args.max_jobs)])
-    if args.cores != None:
+    if args.cores is not None:
         depl.extra_nix_flags.extend(["--cores", str(args.cores)])
     if args.keep_going:
         depl.extra_nix_flags.append("--keep-going")
@@ -157,7 +142,7 @@ def open_deployment(sf: nixops.statefile.StateFile, args: Namespace):
 def set_name(depl: nixops.deployment.Deployment, name: Optional[str]):
     if not name:
         return
-    if not re.match("^[a-zA-Z_\-][a-zA-Z0-9_\-\.]*$", name):
+    if not re.match("^[a-zA-Z_\-][a-zA-Z0-9_\-\.]*$", name):  # noqa: W605
         raise Exception("invalid deployment name ‘{0}’".format(name))
     depl.name = name
 
@@ -165,12 +150,35 @@ def set_name(depl: nixops.deployment.Deployment, name: Optional[str]):
 def modify_deployment(args, depl: nixops.deployment.Deployment):
     nix_exprs = args.nix_exprs
     templates = args.templates or []
-    for i in templates:
-        nix_exprs.append("<nixops/templates/{0}.nix>".format(i))
-    if len(nix_exprs) == 0:
-        raise Exception("you must specify the path to a Nix expression and/or use ‘-t’")
-    depl.nix_exprs = [os.path.abspath(x) if x[0:1] != "<" else x for x in nix_exprs]
-    depl.nix_path = [nixops.util.abs_nix_path(x) for x in sum(args.nix_path or [], [])]
+
+    if args.flake is None:
+        for i in templates:
+            nix_exprs.append("<nixops/templates/{0}.nix>".format(i))
+        if len(nix_exprs) == 0:
+            raise Exception(
+                "you must specify the path to a Nix expression and/or use ‘-t’"
+            )
+        depl.nix_exprs = [os.path.abspath(x) if x[0:1] != "<" else x for x in nix_exprs]
+        depl.nix_path = [
+            nixops.util.abs_nix_path(x) for x in sum(args.nix_path or [], [])
+        ]
+    else:
+        if nix_exprs:
+            raise Exception(
+                "you cannot specify a Nix expression in conjunction with '--flake'"
+            )
+        if args.nix_path:
+            raise Exception(
+                "you cannot specify a Nix search path ('-I') in conjunction with '--flake'"
+            )
+        if len(templates) != 0:
+            raise Exception(
+                "you cannot specify a template ('-t') in conjunction with '--flake'"
+            )
+        # FIXME: should absolutize args.flake if it's a local path.
+        depl.flake_uri = args.flake
+        depl.nix_exprs = []
+        depl.nix_path = []
 
 
 def op_create(args):
@@ -205,11 +213,11 @@ def op_delete(args):
 
 
 def machine_to_key(depl: str, name: str, type: str) -> Tuple[str, str, List[object]]:
-    xs = [int(x) if x.isdigit() else x for x in re.split("(\d+)", name)]
+    xs = [int(x) if x.isdigit() else x for x in re.split("(\d+)", name)]  # noqa: W605
     return (depl, type, xs)
 
 
-def op_info(args):
+def op_info(args):  # noqa: C901
     table_headers = [
         ("Name", "l"),
         ("Status", "c"),
@@ -221,7 +229,7 @@ def op_info(args):
     def state(
         depl: nixops.deployment.Deployment,
         d: Optional[nixops.resources.ResourceDefinition],
-        m: nixops.backends.MachineState,
+        m: nixops.backends.GenericMachineState,
     ) -> str:
         if d and m.obsolete:
             return "Revived"
@@ -238,7 +246,7 @@ def op_info(args):
                 depl.evaluate()
             except nixops.deployment.NixEvalError:
                 sys.stderr.write(
-                    nixops.util.ansi_warn(
+                    nixops.ansi.ansi_warn(
                         "warning: evaluation of the deployment specification failed; status info may be incorrect\n\n"
                     )
                 )
@@ -251,7 +259,9 @@ def op_info(args):
         # names numerically (e.g. "foo10" comes after "foo9").
         def name_to_key(name: str) -> Tuple[str, str, List[object]]:
             d: Optional[nixops.resources.ResourceDefinition] = definitions.get(name)
-            r: Optional[nixops.resources.ResourceState] = depl.resources.get(name)
+            r: Optional[nixops.resources.GenericResourceState] = depl.resources.get(
+                name
+            )
             if r:
                 key = machine_to_key(depl.uuid, name, r.get_type())
             elif d:
@@ -333,9 +343,16 @@ def op_info(args):
                 print("Network name:", depl.name or "(none)")
                 print("Network UUID:", depl.uuid)
                 print("Network description:", depl.description)
-                print("Nix expressions:", " ".join(depl.nix_exprs))
-                if depl.nix_path != []:
-                    print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
+
+                if depl.flake_uri is None:
+                    print("Nix expressions:", " ".join(depl.nix_exprs))
+                    if depl.nix_path != []:
+                        print("Nix path:", " ".join(["-I " + x for x in depl.nix_path]))
+                else:
+                    print("Flake URI:", depl.flake_uri)
+                    if depl.cur_flake_uri is not None:
+                        print("Deployed flake URI:", depl.cur_flake_uri)
+
                 if depl.rollback_enabled:
                     print("Nix profile:", depl.get_profile())
                 if depl.args != {}:
@@ -349,18 +366,18 @@ def op_info(args):
                 print(tbl)
 
 
-def op_check(args):
+def op_check(args):  # noqa: C901
     def highlight(s):
-        return nixops.util.ansi_highlight(s, outfile=sys.stdout)
+        return nixops.ansi.ansi_highlight(s, outfile=sys.stdout)
 
     def warn(s):
-        return nixops.util.ansi_warn(s, outfile=sys.stdout)
+        return nixops.ansi.ansi_warn(s, outfile=sys.stdout)
 
     def render_tristate(x):
-        if x == None:
+        if x is None:
             return "N/A"
         elif x:
-            return nixops.util.ansi_success("Yes", outfile=sys.stdout)
+            return nixops.ansi.ansi_success("Yes", outfile=sys.stdout)
         else:
             return warn("No")
 
@@ -378,8 +395,8 @@ def op_check(args):
         ]
     )
 
-    machines: List[nixops.backends.MachineState] = []
-    resources: List[nixops.resources.ResourceState] = []
+    machines: List[nixops.backends.GenericMachineState] = []
+    resources: List[nixops.resources.GenericResourceState] = []
 
     def check(depl: nixops.deployment.Deployment):
         for m in depl.active_resources.values():
@@ -398,19 +415,24 @@ def op_check(args):
 
         ResourceStatus = Tuple[
             str,
-            Union[nixops.backends.MachineState, nixops.resources.ResourceState],
+            Union[
+                nixops.backends.GenericMachineState,
+                nixops.resources.GenericResourceState,
+            ],
             List[str],
             int,
         ]
 
         # Check all machines in parallel.
-        def worker(m: nixops.backends.MachineState) -> ResourceStatus:
+        def worker(m: nixops.backends.GenericMachineState) -> ResourceStatus:
             res = m.check()
 
             unit_lines = []
             if res.failed_units:
                 unit_lines.append(
-                    "\n".join([warn("{0} [failed]".format(x)) for x in res.failed_units])
+                    "\n".join(
+                        [warn("{0} [failed]".format(x)) for x in res.failed_units]
+                    )
                 )
             if res.in_progress_units:
                 unit_lines.append(
@@ -429,29 +451,32 @@ def op_check(args):
                 render_tristate(res.is_reachable),
                 render_tristate(res.disks_ok),
                 "{0} {1} {2}".format(res.load[0], res.load[1], res.load[2])
-                if res.load != None
+                if res.load is not None
                 else "",
                 "\n".join(unit_lines),
                 "\n".join([warn(x) for x in res.messages]),
             ]
             status = 0
-            if res.exists == False:
+            if res.exists is False:
                 status |= 1
-            if res.is_up == False:
+            if res.is_up is False:
                 status |= 2
-            if res.is_reachable == False:
+            if res.is_reachable is False:
                 status |= 4
-            if res.disks_ok == False:
+            if res.disks_ok is False:
                 status |= 8
-            if res.failed_units != None and res.failed_units != []:
+            if res.failed_units is not None and res.failed_units != []:
                 status |= 16
             return (m.depl.name or m.depl.uuid, m, row, status)
 
         resources_tbl = create_table(
-            ([("Deployment", "l")] if args.all else []) + [("Name", "l"), ("Exists", "l")]
+            ([("Deployment", "l")] if args.all else [])
+            + [("Name", "l"), ("Exists", "l")]
         )
 
-        def resource_worker(r: nixops.resources.ResourceState) -> Optional[ResourceStatus]:
+        def resource_worker(
+            r: nixops.resources.GenericResourceState,
+        ) -> Optional[ResourceStatus]:
             if not nixops.deployment.is_machine(r):
                 r.check()
                 exist = True if r.state == nixops.resources.ResourceState.UP else False
@@ -475,7 +500,7 @@ def op_check(args):
         ):
             tbl.add_row(res[2])
             status |= res[3]
-        print(nixops.util.ansi_success("Machines state:"))
+        print(nixops.ansi.ansi_success("Machines state:"))
         print(tbl)
 
         for res in sorted(
@@ -484,7 +509,7 @@ def op_check(args):
         ):
             resources_tbl.add_row(res[2])
             status |= res[3]
-        print(nixops.util.ansi_success("Non machines resources state:"))
+        print(nixops.ansi.ansi_success("Non machines resources state:"))
         print(resources_tbl)
 
         sys.exit(status)
@@ -592,6 +617,7 @@ def op_deploy(args):
         depl.deploy(
             dry_run=args.dry_run,
             test=args.test,
+            boot=args.boot,
             build_only=args.build_only,
             plan_only=args.plan_only,
             create_only=args.create_only,
@@ -723,7 +749,7 @@ def op_dump_nix_paths(args):
             + [depl.configs_path]
         )
         candidates = [get_nix_path(p) for p in candidates]
-        return [p for p in candidates if not p is None]
+        return [p for p in candidates if p is not None]
 
     paths: List[str] = []
 
@@ -762,7 +788,7 @@ def op_import(args):
             sys.stderr.write("added deployment ‘{0}’\n".format(uuid))
 
             if args.include_keys:
-                for m in depl.active.values():
+                for m in depl.active_machines.values():
                     if nixops.deployment.is_machine(m) and hasattr(
                         m, "public_host_key"
                     ):
@@ -772,26 +798,40 @@ def op_import(args):
                             nixops.known_hosts.add(m.private_ipv4, m.public_host_key)
 
 
-def parse_machine(name):
-    return ("root", name) if name.find("@") == -1 else name.split("@", 1)
+def parse_machine(name, depl):
+    username, machine_name = (
+        (None, name) if name.find("@") == -1 else name.split("@", 1)
+    )
+
+    # For nixops mount, split path element
+    machine_name = machine_name.split(":")[0]
+
+    m = depl.machines.get(machine_name)
+
+    if not m:
+        raise Exception("unknown machine ‘{0}’".format(machine_name))
+
+    if not username and m.ssh_user:
+        username = m.ssh_user
+
+    if username is None:
+        username = "root"
+
+    return username, machine_name, m
 
 
 def op_ssh(args):
     with deployment(args) as depl:
-        (username, machine) = parse_machine(args.machine)
-        m = depl.machines.get(machine)
-        if not m:
-            raise Exception("unknown machine ‘{0}’".format(machine))
+        (username, _, m) = parse_machine(args.machine, depl)
         flags, command = m.ssh.split_openssh_args(args.args)
-        user = None if username == "root" else username
         sys.exit(
             m.ssh.run_command(
                 command,
-                flags,
+                flags=flags,
                 check=False,
                 logged=False,
                 allow_ssh_args=True,
-                user=user,
+                user=username,
             )
         )
 
@@ -801,18 +841,19 @@ def op_ssh_for_each(args):
     with one_or_all(args) as depls:
         for depl in depls:
 
-            def worker(m: nixops.backends.MachineState) -> Optional[int]:
+            def worker(m: nixops.backends.GenericMachineState) -> Optional[int]:
                 if not nixops.deployment.should_do(
                     m, args.include or [], args.exclude or []
                 ):
                     return None
+
                 return m.ssh.run_command_get_status(
-                    args.args, allow_ssh_args=True, check=False
+                    args.args, allow_ssh_args=True, check=False, user=m.ssh_user
                 )
 
             results = results + nixops.parallel.run_tasks(
                 nr_workers=len(depl.machines) if args.parallel else 1,
-                tasks=iter(depl.active.values()),
+                tasks=iter(depl.active_machines.values()),
                 worker_fun=worker,
             )
 
@@ -827,10 +868,7 @@ def op_scp(args):
     if args.scp_from == args.scp_to:
         raise Exception("exactly one of ‘--from’ and ‘--to’ must be specified")
     with deployment(args) as depl:
-        (username, machine) = parse_machine(args.machine)
-        m = depl.machines.get(machine)
-        if not m:
-            raise Exception("unknown machine ‘{0}’".format(machine))
+        (username, machine, m) = parse_machine(args.machine, depl)
         ssh_name = m.get_ssh_name()
         from_loc = scp_loc(username, ssh_name, args.scp_from, args.source)
         to_loc = scp_loc(username, ssh_name, args.scp_to, args.destination)
@@ -843,33 +881,18 @@ def op_scp(args):
 
 
 def op_mount(args):
+    # TODO: Fixme
     with deployment(args) as depl:
-        (username, rest) = parse_machine(args.machine)
-        (machine, remote_path) = (
-            (rest, "/") if rest.find(":") == -1 else rest.split(":", 1)
-        )
-        m = depl.machines.get(machine)
-        if not m:
-            raise Exception("unknown machine ‘{0}’".format(machine))
+        (username, rest, m) = parse_machine(args.machine, depl)
+        try:
+            remote_path = args.machine.split(":")[1]
+        except IndexError:
+            remote_path = "/"
+
         ssh_name = m.get_ssh_name()
 
-        flags = m.get_ssh_flags()
-        new_flags = []
-        n = 0
-        while n < len(flags):
-            if flags[n] == "-i":
-                new_flags.extend(["-o", "IdentityFile=" + flags[n + 1]])
-                n = n + 2
-            elif flags[n] == "-p":
-                new_flags.extend(["-p", flags[n + 1]])
-                n = n + 2
-            elif flags[n] == "-o":
-                new_flags.extend(["-o", flags[n + 1]])
-                n = n + 2
-            else:
-                raise Exception(
-                    "don't know how to pass SSH flag ‘{0}’ to sshfs".format(flags[n])
-                )
+        ssh_flags = nixops.util.shlex_join(["ssh"] + m.get_ssh_flags())
+        new_flags = ["-o" f"ssh_command={ssh_flags}"]
 
         for o in args.sshfs_option or []:
             new_flags.extend(["-o", o])
@@ -894,21 +917,6 @@ def op_show_option(args):
                 args.option,
                 json=args.json,
                 xml=args.xml,
-                include_physical=args.include_physical,
-            )
-        )
-
-
-def op_eval(args):
-    with deployment(args) as depl:
-        if args.include_physical:
-            depl.evaluate()
-
-        sys.stdout.write(
-            depl.evaluate_code(
-                args.code,
-                json=args.json,
-                strict=args.strict,
                 include_physical=args.include_physical,
             )
         )
@@ -983,41 +991,13 @@ def op_edit(args):
 
 def op_copy_closure(args):
     with deployment(args) as depl:
-        (username, machine) = parse_machine(args.machine)
-        m = depl.machines.get(machine)
-        if not m:
-            raise Exception("unknown machine ‘{0}’".format(machine))
-        env = dict(os.environ)
-        env["NIX_SSHOPTS"] = " ".join(m.get_ssh_flags())
-        res = nixops.util.logged_exec(
-            [
-                "nix",
-                "copy",
-                "--to",
-                "ssh://{}".format(m.get_ssh_name()),
-                args.storepath,
-            ],
-            m.logger,
-            env=env,
-        )
-        sys.exit(res)
-
-
-def setup_debugger(args: Namespace) -> None:
-    def hook(_type: Type[BaseException], value: BaseException, tb: TracebackType):
-        if hasattr(sys, "ps1") or not sys.stderr.isatty():
-            sys.__excepthook__(_type, value, tb)
-        else:
-            traceback.print_exception(_type, value, tb)
-            pdb.post_mortem(tb)
-
-    if args.pdb:
-        sys.excepthook = hook
+        (username, machine, m) = parse_machine(args.machine, depl)
+        m.copy_closure_to(args.storepath)
 
 
 # Set up logging of all commands and output
 def setup_logging(args):
-    if os.path.exists("/dev/log") and not args.op in [
+    if os.path.exists("/dev/log") and args.op not in [
         op_ssh,
         op_ssh_for_each,
         op_scp,
@@ -1036,7 +1016,7 @@ def setup_logging(args):
             user = subprocess.check_output(
                 ["logname"], stderr=subprocess.PIPE, text=True
             ).strip()
-        except:
+        except Exception:
             user = pwd.getpwuid(os.getuid())[0]
 
         logger = logging.getLogger("root")
@@ -1159,6 +1139,12 @@ def add_common_modify_options(subparser: ArgumentParser):
         metavar="TEMPLATE",
         help="name of template to be used",
     )
+    subparser.add_argument(
+        "--flake",
+        dest="flake",
+        metavar="FLAKE_URI",
+        help="URI of the flake that defines the network",
+    )
 
 
 def add_common_deployment_options(subparser: ArgumentParser):
@@ -1205,8 +1191,8 @@ def add_common_deployment_options(subparser: ArgumentParser):
 
 
 def error(msg):
-    sys.stderr.write(nixops.util.ansi_warn("error: ") + msg + "\n")
+    sys.stderr.write(nixops.ansi.ansi_warn("error: ") + msg + "\n")
 
 
 def parser_plugin_hooks(parser, subparsers):
-    pm.hook.parser(parser=parser, subparsers=subparsers)
+    PluginManager.parser(parser, subparsers)
